@@ -62,7 +62,7 @@ POST it to `/api/events/jamf`. Supported types are `device.changed` and `device.
 
 ## Verification
 
-The portable PHP suite passes **16 tests / 82 assertions** covering first/repeated sync, reassignment and RAM, separate configuration for shared models, null/missing fields, identity conflicts, incomplete snapshot protection, local asset/employee deletion, restoration, unassignment/absence, durable receipt, duplicate/conflicting events, latest-state processing, failure/retry, and pending-inbox recovery. React production build passes.
+The portable PHP suite passes **17 tests / 84 assertions** covering first/repeated sync, reassignment and RAM, separate configuration for shared models, null/missing fields, identity conflicts, incomplete snapshot protection, local asset/employee deletion, restoration, unassignment/absence, durable receipt, duplicate/conflicting events, latest-state processing, failure/retry, and pending-inbox recovery. React production build passes.
 
 Docker images and Compose startup were verified with real MySQL: migrations, full 7/6 import, unchanged repeat, asset delete/targeted restore, employee delete/recreation, and a real database-queue worker processing a duplicate notification only once. Browser validation and further integration results are recorded in the handoff report.
 
@@ -83,3 +83,4 @@ The mock's targeted lookup still reads the complete local file. It reduces write
 The queue is at-least-once, not exactly-once transport: transactions and idempotent processing make duplicate delivery safe. Pending inbox recovery covers dispatch gaps. A hard process termination may leave a historical run `in_progress`; production would add stale-run cleanup and monitoring. Restore task outcomes are terminal until another local deletion/full source reconciliation; no scheduled restore loop is claimed.
 
 No GitHub repository was published and no reviewer permissions were changed.
+
