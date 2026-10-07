@@ -1,0 +1,54 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: mdm
+      MYSQL_USER: mdm
+      MYSQL_PASSWORD: local-password
+      MYSQL_ROOT_PASSWORD: local-root-password
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: [CMD, mysqladmin, ping, -h, localhost, -plocal-root-password]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  backend:
+    build: ./backend
+    environment: &backend_env
+      APP_ENV: local
+      APP_DEBUG: "false"
+      APP_KEY: base64:5PSfzg00MxYaEq57/j+7q30hgToUVvNTTbMVvqMA97g=
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_DATABASE: mdm
+      DB_USERNAME: mdm
+      DB_PASSWORD: local-password
+      CACHE_STORE: database
+      QUEUE_CONNECTION: database
+      JAMF_MOCK_PATH: /data/api-mock-response.json
+    ports: ["127.0.0.1:8000:8000"]
+    volumes: ["./files:/data:ro"]
+    depends_on:
+      mysql: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, php, -r, "exit(@file_get_contents('http://localhost:8000/up') === false ? 1 : 0);"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  worker:
+    build: ./backend
+    environment: *backend_env
+    volumes: ["./files:/data:ro"]
+    command: [sh, -c, "while true; do php artisan events:recover; php artisan queue:work --stop-when-empty --tries=3 --timeout=60 --sleep=1; sleep 3; done"]
+    depends_on:
+      backend: {condition: service_healthy}
+  frontend:
+    build: ./frontend
+    environment:
+      API_PROXY: http://backend:8000
+    ports: ["127.0.0.1:5173:5173"]
+    depends_on:
+      backend: {condition: service_healthy}
+volumes:
+  mysql_data:
