@@ -41,10 +41,90 @@ React Assets/Employees tabs, details, delete confirmations, loading/errors, summ
 6. Add durable event intake/worker/retry and tests.
 7. Add API/UI and build checks.
 8. Document startup, assumptions and measured verification limits.
-Each step is a small atomic commit. No publish/PR required. Docker CLI is installed but daemon unavailable on host; do not claim successful container startup. Use available npm at C:/Program Files/nodejs/npm.cmd; no global runtime installations.
+Each step is a small atomic commit. No publish/PR required. Docker became available after the user restarted it; root verification will report actual container results separately. Use available npm at C:/Program Files/nodejs/npm.cmd; no global runtime installations.
 
 ## Verification
 Test initial 7/6, unchanged repeat, RAM update, reassignment, null handling, duplicate rollback, delete recreation, employee deletion, unassignment/missing policies, malformed snapshot no deletions, event idempotency/conflicting IDs, targeted current-state lookup, failed event persistence/retry and restoration. Frontend build and browser/API checks when runnable. SQLite tests do not prove MySQL locks/constraints; report real-MySQL coverage separately.
 
 ## Future production extension
 Verify Jamf event support, signatures, timestamps, batch/targeted endpoints. Add authenticated webhook integration, tenant-scoped identities, provider checkpoints only when supported and scheduled authoritative reconciliation. Local CRUD does not emit upstream events; restoration remains independent. Serverless execution is a deployment option, not required for event-driven processing.
+
+## Architecture diagram
+```mermaid
+flowchart TD
+    React[React UI] -->|HTTP JSON| API[Laravel controllers]
+    API --> Full[Sync coordinator]
+    API --> Inbox[Durable event inbox]
+    Inbox --> Queue[Database queue]
+    Queue --> Worker[Worker]
+    Worker --> Full
+    Full --> Adapter[DeviceProvider / Jamf mock adapter]
+    Adapter --> Mock[Unchanged inventory JSON]
+    Full --> Reconcile[Device reconciler]
+    Reconcile --> DB[(MySQL)]
+    API --> Delete[Atomic local deletion and restore task]
+    Delete --> DB
+    DB -->|Pending restorations| Full
+```
+
+## Entity relationships
+```mermaid
+erDiagram
+    EMPLOYEE o|--o{ ASSET : assigned
+    DEVICE_MODEL o|--o{ ASSET : describes
+    ASSET ||--|| ASSET_ATTRIBUTE : specifications
+    EMPLOYEE {
+        bigint id PK
+        string email UK
+        string name
+        string phone
+    }
+    DEVICE_MODEL {
+        bigint id PK
+        string manufacturer
+        string model_identifier
+        string model_name
+    }
+    ASSET {
+        bigint id PK
+        string serial_code UK
+        bigint employee_id FK
+        bigint device_model_id FK
+        string provider
+        string provider_device_id
+    }
+    ASSET_ATTRIBUTE {
+        bigint asset_id FK,UK
+        decimal ram_gb
+        decimal storage_gb
+        string processor_type
+        int core_count
+        decimal battery_capacity_percent
+    }
+```
+The nullable relationships reflect missing model identity and the temporary state after local employee deletion. Restore tasks and event inbox rows intentionally do not cascade with assets, because they must survive asset deletion.
+
+## API examples
+Manual reconciliation:
+```http
+POST /api/sync
+Accept: application/json
+```
+Response contains the persisted SyncRun, its status and counters such as created_assets, updated_assets and unchanged_assets.
+
+Simulated notification (not an actual Jamf payload):
+```http
+POST /api/events/jamf
+Content-Type: application/json
+
+{"event_id":"demo-101-001","provider_device_id":"101","type":"device.changed"}
+```
+HTTP 202 means durably accepted, not processed. GET /api/events exposes completion and error status. Reusing the same event ID and payload does not apply a second independent event.
+
+Restore local deletions without a full reconciliation:
+```http
+POST /api/restorations
+Accept: application/json
+```
+The mock adapter still reads the file once. Only pending restore identities are reconciled; unrelated inventory is not updated by this operation.
+
