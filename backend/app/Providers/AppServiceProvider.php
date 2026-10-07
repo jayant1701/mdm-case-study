@@ -2,23 +2,16 @@
 
 namespace App\Providers;
 
+use App\Contracts\DeviceProvider;
+use App\Providers\Devices\JamfMockProvider;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
 {
-    /**
-     * Register any application services.
-     */
     public function register(): void
     {
-        //
+        $this->app->bind(DeviceProvider::class, JamfMockProvider::class);
     }
 
-    /**
-     * Bootstrap any application services.
-     */
-    public function boot(): void
-    {
-        //
-    }
+    public function boot(): void {}
 }

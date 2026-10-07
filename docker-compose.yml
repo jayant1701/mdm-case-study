@@ -1,3 +1,4 @@
+name: mdm-event-demo
 services:
   mysql:
     image: mysql:8.4
@@ -52,3 +53,4 @@ services:
       backend: {condition: service_healthy}
 volumes:
   mysql_data:
+
