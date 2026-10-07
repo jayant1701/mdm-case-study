@@ -6,42 +6,10 @@ use App\Models\Asset;
 use App\Models\Employee;
 use App\Models\SyncRun;
 use App\Services\SyncCoordinator;
-use Illuminate\Foundation\Testing\RefreshDatabase;
-use Tests\TestCase;
+use Tests\InventoryTestCase;
 
-class InventorySyncTest extends TestCase
+class InventorySyncTest extends InventoryTestCase
 {
-    use RefreshDatabase;
-
-    protected string $fixture;
-
-    protected array $source;
-
-    protected function setUp(): void
-    {
-        parent::setUp();
-        $this->fixture = tempnam(sys_get_temp_dir(), 'mdm');
-        $this->source = json_decode(file_get_contents(base_path('../files/api-mock-response.json')), true);
-        config(['mdm.mock_path' => $this->fixture]);
-        $this->write();
-    }
-
-    protected function tearDown(): void
-    {
-        unlink($this->fixture);
-        parent::tearDown();
-    }
-
-    protected function write(): void
-    {
-        file_put_contents($this->fixture, json_encode($this->source));
-    }
-
-    protected function sync()
-    {
-        return app(SyncCoordinator::class)->full();
-    }
-
     public function test_initial_repeat_and_lists(): void
     {
         $first = $this->sync();
@@ -198,6 +166,6 @@ class InventorySyncTest extends TestCase
         $this->source['results'][1]['hardware']['totalRamMegabytes'] = 65536;
         $this->write();
         $this->postJson('/api/sync')->assertStatus(422);
-        $this->assertSame(8.0,Asset::where('provider_device_id','102')->first()->specifications->ram_gb);
+        $this->assertSame(8.0, Asset::where('provider_device_id', '102')->first()->specifications->ram_gb);
     }
 }

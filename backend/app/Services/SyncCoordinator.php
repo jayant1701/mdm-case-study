@@ -20,7 +20,8 @@ final class SyncCoordinator
             $this->reconciler->validateIdentities($snapshot->devices);
             foreach ($snapshot->devices as $d) {
                 $this->reconciler->apply($d, $counts);
-            }$this->reconciler->removeAbsent($snapshot->devices, $counts);
+            }
+            $this->reconciler->removeAbsent($snapshot->devices, $counts);
         });
     }
 

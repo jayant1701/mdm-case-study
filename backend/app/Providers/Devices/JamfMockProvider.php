@@ -38,12 +38,14 @@ final class JamfMockProvider implements DeviceProvider
             if ($record->serial !== null) {
                 if (isset($serials[$record->serial])) {
                     throw new RuntimeException('Duplicate serial in snapshot: '.$record->serial);
-                }$serials[$record->serial] = true;
+                }
+                $serials[$record->serial] = true;
             }
             if ($record->providerId !== null) {
                 if (isset($ids[$record->providerId])) {
                     throw new RuntimeException('Duplicate provider device ID: '.$record->providerId);
-                }$ids[$record->providerId] = true;
+                }
+                $ids[$record->providerId] = true;
             }
             $records[] = $record;
         }
@@ -53,13 +55,15 @@ final class JamfMockProvider implements DeviceProvider
             if ($r->email) {
                 if (isset($employees[$r->email]) && $employees[$r->email] !== $r->employee) {
                     $warnings[] = 'Conflicting employee metadata for '.$r->email.'; sorted provider ID precedence applied.';
-                }$employees[$r->email] = array_merge($employees[$r->email] ?? [], $r->employee);
+                }
+                $employees[$r->email] = array_merge($employees[$r->email] ?? [], $r->employee);
             }
             if ($r->model) {
                 $key = $r->model['manufacturer'].'|'.$r->model['model_identifier'];
                 if (isset($models[$key]) && $models[$key] !== $r->model) {
                     $warnings[] = 'Conflicting model metadata for '.$key.'; sorted provider ID precedence applied.';
-                }$models[$key] = array_merge($models[$key] ?? [], $r->model);
+                }
+                $models[$key] = array_merge($models[$key] ?? [], $r->model);
             }
         }
         $records = array_map(fn ($r) => new DeviceRecord($r->providerId, $r->serial, $r->email, $r->email ? ($employees[$r->email] ?? $r->employee) : $r->employee, $r->model ? ($models[$r->model['manufacturer'].'|'.$r->model['model_identifier']] ?? $r->model) : null, $r->asset, $r->specifications, $r->preserveModel), $records);
@@ -111,7 +115,8 @@ final class JamfMockProvider implements DeviceProvider
         if (array_key_exists('purchased', $purchasing)) {
             if (! is_bool($purchasing['purchased']) && $purchasing['purchased'] !== null) {
                 throw new RuntimeException('Invalid purchased value.');
-            }$asset['purchased'] = $purchasing['purchased'];
+            }
+            $asset['purchased'] = $purchasing['purchased'];
         }
         if (array_key_exists('poDate', $purchasing)) {
             $asset['purchase_date'] = $this->date($purchasing['poDate'], true);
@@ -124,7 +129,8 @@ final class JamfMockProvider implements DeviceProvider
                     throw new RuntimeException('Invalid numeric hardware field: '.$source);
                 }if ($source === 'coreCount' && $v !== null && (float) $v !== (float) (int) $v) {
                     throw new RuntimeException('Core count must be an integer.');
-                }$specs[$target] = $v === null ? null : ($source === 'totalRamMegabytes' ? round((float) $v / 1024, 2) : ($source === 'coreCount' ? (int) $v : (float) $v));
+                }
+                $specs[$target] = $v === null ? null : ($source === 'totalRamMegabytes' ? round((float) $v / 1024, 2) : ($source === 'coreCount' ? (int) $v : (float) $v));
             }
         }
         if (isset($row['storage']) && array_key_exists('disks', $row['storage'])) {
@@ -134,13 +140,16 @@ final class JamfMockProvider implements DeviceProvider
             } else {
                 if (! is_array($disks)) {
                     throw new RuntimeException('Invalid storage disks.');
-                }$sum = 0;
+                }
+                $sum = 0;
                 foreach ($disks as $disk) {
                     $size = $disk['sizeMegabytes'] ?? null;
                     if ($size !== null && (! is_numeric($size) || $size < 0)) {
                         throw new RuntimeException('Invalid disk size.');
-                    }$sum += (float) $size;
-                }$specs['storage_gb'] = $sum ? round($sum / 1024, 2) : null;
+                    }
+                    $sum += (float) $size;
+                }
+                $specs['storage_gb'] = $sum ? round($sum / 1024, 2) : null;
             }
         }
 
@@ -153,7 +162,8 @@ final class JamfMockProvider implements DeviceProvider
             return null;
         }if (! is_string($value) && ! is_int($value)) {
             throw new RuntimeException('Expected a string value.');
-        }$value = trim((string) $value);
+        }
+        $value = trim((string) $value);
 
         return $value === '' ? null : $value;
     }
@@ -167,7 +177,7 @@ final class JamfMockProvider implements DeviceProvider
             }
         }
 
-return $result;
+        return $result;
     }
 
     private function date(mixed $value, bool $dateOnly = false): ?string
@@ -181,7 +191,7 @@ return $result;
 
             return $dateOnly ? $date->toDateString() : $date->utc()->format('Y-m-d H:i:s');
         } catch (\Throwable $e) {
-            throw new RuntimeException('Invalid source date.',0,$e);
+            throw new RuntimeException('Invalid source date.', 0, $e);
         }
     }
 }
