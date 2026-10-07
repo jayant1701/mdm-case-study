@@ -4,7 +4,7 @@ namespace App\Jobs;
 
 use App\Models\EventInbox;
 use App\Models\SyncRun;
-use App\Services\SyncCoordinator;
+use App\Services\JamfSyncService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\DB;
@@ -24,7 +24,7 @@ final class ProcessDeviceEvent implements ShouldQueue
         return [5, 15, 30];
     }
 
-    public function handle(SyncCoordinator $sync): void
+    public function handle(JamfSyncService $sync): void
     {
         $processed = false;
         try {

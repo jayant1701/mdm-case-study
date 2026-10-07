@@ -6,7 +6,7 @@ use App\Models\Asset;
 use App\Models\Employee;
 use App\Models\SyncRun;
 use App\Services\AssetDeletionService;
-use App\Services\SyncCoordinator;
+use App\Services\JamfSyncService;
 
 final class InventoryController extends Controller
 {
@@ -30,12 +30,12 @@ final class InventoryController extends Controller
         return ['data' => SyncRun::latest('id')->limit(25)->get()];
     }
 
-    public function sync(SyncCoordinator $sync)
+    public function sync(JamfSyncService $sync)
     {
         return $sync->full();
     }
 
-    public function restore(SyncCoordinator $sync)
+    public function restore(JamfSyncService $sync)
     {
         return $sync->restore();
     }

@@ -127,7 +127,8 @@ final class JamfMockProvider implements DeviceProvider
                 $v = $h[$source];
                 if ($v !== null && (! is_numeric($v) || $v < 0)) {
                     throw new RuntimeException('Invalid numeric hardware field: '.$source);
-                }if ($source === 'coreCount' && $v !== null && (float) $v !== (float) (int) $v) {
+                }
+                if ($source === 'coreCount' && $v !== null && (float) $v !== (float) (int) $v) {
                     throw new RuntimeException('Core count must be an integer.');
                 }
                 $specs[$target] = $v === null ? null : ($source === 'totalRamMegabytes' ? round((float) $v / 1024, 2) : ($source === 'coreCount' ? (int) $v : (float) $v));
@@ -160,7 +161,8 @@ final class JamfMockProvider implements DeviceProvider
     {
         if ($value === null) {
             return null;
-        }if (! is_string($value) && ! is_int($value)) {
+        }
+        if (! is_string($value) && ! is_int($value)) {
             throw new RuntimeException('Expected a string value.');
         }
         $value = trim((string) $value);
@@ -184,9 +186,11 @@ final class JamfMockProvider implements DeviceProvider
     {
         if ($value === null) {
             return null;
-        }if (! is_string($value) || trim($value) === '' || ! preg_match('/^\d{4}-\d{2}-\d{2}(?:T.*)?$/', $value)) {
+        }
+        if (! is_string($value) || trim($value) === '' || ! preg_match('/^\d{4}-\d{2}-\d{2}(?:T.*)?$/', $value)) {
             throw new RuntimeException('Invalid source date.');
-        }try {
+        }
+        try {
             $date = CarbonImmutable::parse($value);
 
             return $dateOnly ? $date->toDateString() : $date->utc()->format('Y-m-d H:i:s');

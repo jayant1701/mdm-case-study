@@ -2,7 +2,7 @@
 
 namespace Tests;
 
-use App\Services\SyncCoordinator;
+use App\Services\JamfSyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 abstract class InventoryTestCase extends TestCase
@@ -35,6 +35,6 @@ abstract class InventoryTestCase extends TestCase
 
     protected function sync()
     {
-        return app(SyncCoordinator::class)->full();
+        return app(JamfSyncService::class)->full();
     }
 }

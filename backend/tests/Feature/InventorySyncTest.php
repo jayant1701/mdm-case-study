@@ -5,7 +5,7 @@ namespace Tests\Feature;
 use App\Models\Asset;
 use App\Models\Employee;
 use App\Models\SyncRun;
-use App\Services\SyncCoordinator;
+use App\Services\JamfSyncService;
 use Tests\InventoryTestCase;
 
 class InventorySyncTest extends InventoryTestCase
@@ -76,13 +76,13 @@ class InventorySyncTest extends InventoryTestCase
         $this->sync();
         $a = Asset::where('provider_device_id', '101')->first();
         $this->deleteJson('/api/assets/'.$a->id)->assertNoContent();
-        app(SyncCoordinator::class)->restore();
+        app(JamfSyncService::class)->restore();
         $this->assertDatabaseCount('assets', 7);
         $a = Asset::where('provider_device_id', '101')->first();
         $this->deleteJson('/api/assets/'.$a->id);
         $this->source['results'][0]['userAndLocation']['email'] = null;
         $this->write();
-        app(SyncCoordinator::class)->restore();
+        app(JamfSyncService::class)->restore();
         $this->assertDatabaseHas('restore_tasks', ['status' => 'upstream_unassigned']);
         $this->assertDatabaseCount('assets', 6);
         $b = Asset::where('provider_device_id', '102')->first();
@@ -90,7 +90,7 @@ class InventorySyncTest extends InventoryTestCase
         array_splice($this->source['results'], 1, 1);
         $this->source['totalCount'] = 6;
         $this->write();
-        app(SyncCoordinator::class)->restore();
+        app(JamfSyncService::class)->restore();
         $this->assertDatabaseHas('restore_tasks', ['serial_code' => $b->serial_code, 'status' => 'upstream_missing']);
     }
 
@@ -167,5 +167,19 @@ class InventorySyncTest extends InventoryTestCase
         $this->write();
         $this->postJson('/api/sync')->assertStatus(422);
         $this->assertSame(8.0, Asset::where('provider_device_id', '102')->first()->specifications->ram_gb);
+    }
+
+    public function test_missing_model_fields_preserve_reference_and_explicit_null_clears(): void
+    {
+        $this->sync();
+        $original = Asset::where('provider_device_id', '101')->first()->device_model_id;
+        unset($this->source['results'][0]['hardware']['make'], $this->source['results'][0]['hardware']['modelIdentifier']);
+        $this->write();
+        $this->sync();
+        $this->assertSame($original, Asset::where('provider_device_id', '101')->first()->device_model_id);
+        $this->source['results'][0]['hardware']['modelIdentifier'] = null;
+        $this->write();
+        $this->sync();
+        $this->assertNull(Asset::where('provider_device_id', '101')->first()->device_model_id);
     }
 }

@@ -8,7 +8,7 @@ use App\Models\RestoreTask;
 use App\Models\SyncRun;
 use Illuminate\Support\Facades\DB;
 
-final class SyncCoordinator
+final class JamfSyncService
 {
     public function __construct(private DeviceProvider $provider, private DeviceReconciler $reconciler) {}
 
