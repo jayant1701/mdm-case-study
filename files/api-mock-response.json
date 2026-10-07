@@ -1,0 +1,250 @@
+{
+    "totalCount": 7,
+    "results": [
+        {
+            "id": "101",
+            "udid": "6E662F59-DF86-41CE-BD4C-4AD8CE32369C",
+            "general": {
+                "name": "Alex\u2019s MacBook Pro",
+                "platform": "Mac",
+                "reportDate": "2025-11-20T09:15:00Z",
+                "lastContactTime": "2026-01-05T10:30:12Z",
+                "site": {
+                    "id": "-1",
+                    "name": "None"
+                }
+            },
+            "purchasing": {
+                "purchased": true,
+                "poDate": "2022-06-15"
+            },
+            "userAndLocation": {
+                "username": "alex.smith",
+                "realname": "Alex Smith",
+                "email": "alex.smith@company.test",
+                "position": "Backend Engineer",
+                "phone": "+491234567890"
+            },
+            "hardware": {
+                "make": "Apple",
+                "model": "MacBook Pro (14-inch, M1 Pro, 2021)",
+                "modelIdentifier": "MacBookPro18,3",
+                "serialNumber": "C02DL0XYZQ6N",
+                "processorType": "Apple M1 Pro",
+                "coreCount": 10,
+                "totalRamMegabytes": 16384,
+                "batteryCapacityPercent": 91
+            }
+        },
+        {
+            "id": "102",
+            "udid": "1749649A-4ACA-4F6C-8CA3-B5F7B121A38D",
+            "general": {
+                "name": "Emma\u2019s MacBook Air",
+                "platform": "Mac",
+                "reportDate": "2025-12-02T14:45:10Z",
+                "lastContactTime": "2026-01-04T21:11:55Z",
+                "site": {
+                    "id": "-1",
+                    "name": "None"
+                }
+            },
+            "purchasing": {
+                "purchased": true,
+                "poDate": "2023-02-01"
+            },
+            "userAndLocation": {
+                "username": "emma.johnson",
+                "realname": "Emma Johnson",
+                "email": "emma.johnson@company.test",
+                "position": "Product Designer",
+                "phone": null
+            },
+            "hardware": {
+                "make": "Apple",
+                "model": "MacBook Air (M2, 2022)",
+                "modelIdentifier": "MacBookAir14,2",
+                "serialNumber": "FVFH90ABC123",
+                "processorType": "Apple M2",
+                "coreCount": 8,
+                "totalRamMegabytes": 8192,
+                "batteryCapacityPercent": 88
+            }
+        },
+        {
+            "id": "103",
+            "udid": "616DD564-E93A-4446-9701-679D62EDB3AE",
+            "general": {
+                "name": "Alex\u2019s Secondary MacBook",
+                "platform": "Mac",
+                "reportDate": "2025-12-10T10:00:00Z",
+                "lastContactTime": "2026-01-05T09:20:00Z",
+                "site": {
+                    "id": "-1",
+                    "name": "None"
+                }
+            },
+            "purchasing": {
+                "purchased": true,
+                "poDate": "2023-08-12"
+            },
+            "userAndLocation": {
+                "username": "alex.smith",
+                "realname": "Alex Smith",
+                "email": "alex.smith@company.test",
+                "position": "Backend Engineer",
+                "phone": "+491234567890"
+            },
+            "hardware": {
+                "make": "Apple",
+                "model": "MacBook Pro (16-inch, Intel, 2019)",
+                "modelIdentifier": "MacBookPro16,1",
+                "serialNumber": "C02INTEL9999",
+                "processorType": "Intel Core i9",
+                "coreCount": 8,
+                "totalRamMegabytes": 32768,
+                "batteryCapacityPercent": 82
+            }
+        },
+        {
+            "id": "104",
+            "udid": "9F361A97-939E-46EE-8EF6-4DE5D7A88D66",
+            "general": {
+                "name": "Design Team MacBook",
+                "platform": "Mac",
+                "reportDate": "2025-11-18T08:40:00Z",
+                "lastContactTime": "2026-01-03T18:10:00Z",
+                "site": {
+                    "id": "-1",
+                    "name": "None"
+                }
+            },
+            "purchasing": {
+                "purchased": true,
+                "poDate": "2022-11-05"
+            },
+            "userAndLocation": {
+                "username": "lucas.brown",
+                "realname": "Lucas Brown",
+                "email": "lucas.brown@company.test",
+                "position": "UX Designer",
+                "phone": null
+            },
+            "hardware": {
+                "make": "Apple",
+                "model": "MacBook Pro (13-inch, M1, 2020)",
+                "modelIdentifier": "MacBookPro17,1",
+                "serialNumber": "FVFUXDESIGN1",
+                "processorType": "Apple M1",
+                "coreCount": 8,
+                "totalRamMegabytes": 8192,
+                "batteryCapacityPercent": 89
+            }
+        },
+        {
+            "id": "105",
+            "udid": "831D5992-39A0-4056-9B26-F9D95C0973B9",
+            "general": {
+                "name": "QA Mac Mini",
+                "platform": "Mac",
+                "reportDate": "2025-10-01T11:25:00Z",
+                "lastContactTime": "2026-01-02T16:45:00Z",
+                "site": {
+                    "id": "-1",
+                    "name": "None"
+                }
+            },
+            "purchasing": {
+                "purchased": true,
+                "poDate": "2021-05-20"
+            },
+            "userAndLocation": {
+                "username": "mia.wilson",
+                "realname": "Mia Wilson",
+                "email": "mia.wilson@company.test",
+                "position": "QA Engineer",
+                "phone": "+441234567890"
+            },
+            "hardware": {
+                "make": "Apple",
+                "model": "Mac mini (M1, 2020)",
+                "modelIdentifier": "Macmini9,1",
+                "serialNumber": "MACMINIM1QA",
+                "processorType": "Apple M1",
+                "coreCount": 8,
+                "totalRamMegabytes": 16384,
+                "batteryCapacityPercent": null
+            }
+        },
+        {
+            "id": "106",
+            "udid": "32380659-F3B7-4993-A812-83003BAF07B6",
+            "general": {
+                "name": "Support MacBook Air",
+                "platform": "Mac",
+                "reportDate": "2025-09-12T07:55:00Z",
+                "lastContactTime": "2026-01-01T13:05:00Z",
+                "site": {
+                    "id": "-1",
+                    "name": "None"
+                }
+            },
+            "purchasing": {
+                "purchased": true,
+                "poDate": "2022-01-10"
+            },
+            "userAndLocation": {
+                "username": "noah.miller",
+                "realname": "Noah Miller",
+                "email": "noah.miller@company.test",
+                "position": "Customer Support",
+                "phone": null
+            },
+            "hardware": {
+                "make": "Apple",
+                "model": "MacBook Air (M1, 2020)",
+                "modelIdentifier": "MacBookAir10,1",
+                "serialNumber": "AIRSUPPORT01",
+                "processorType": "Apple M1",
+                "coreCount": 8,
+                "totalRamMegabytes": 8192,
+                "batteryCapacityPercent": 90
+            }
+        },
+        {
+            "id": "107",
+            "udid": "FD14A0E7-D3E4-46BE-AF30-5324187DCF59",
+            "general": {
+                "name": "Finance Team MacBook",
+                "platform": "Mac",
+                "reportDate": "2025-08-05T09:10:00Z",
+                "lastContactTime": "2025-12-28T19:30:00Z",
+                "site": {
+                    "id": "-1",
+                    "name": "None"
+                }
+            },
+            "purchasing": {
+                "purchased": true,
+                "poDate": "2020-03-15"
+            },
+            "userAndLocation": {
+                "username": "olivia.davis",
+                "realname": "Olivia Davis",
+                "email": "olivia.davis@company.test",
+                "position": "Finance Manager",
+                "phone": "+33123456789"
+            },
+            "hardware": {
+                "make": "Apple",
+                "model": "MacBook Pro (15-inch, 2018)",
+                "modelIdentifier": "MacBookPro15,1",
+                "serialNumber": "FINANCEPRO15",
+                "processorType": "Intel Core i7",
+                "coreCount": 6,
+                "totalRamMegabytes": 16384,
+                "batteryCapacityPercent": 78
+            }
+        }
+    ]
+}

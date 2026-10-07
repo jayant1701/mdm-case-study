@@ -1,0 +1,6 @@
+work/
+outputs/
+vendor/
+node_modules/
+.env
+
