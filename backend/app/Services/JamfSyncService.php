@@ -3,14 +3,15 @@
 namespace App\Services;
 
 use App\Contracts\DeviceProvider;
-use App\Models\Employee;
-use App\Models\RestoreTask;
+use App\Contracts\Persistence\EmployeeRepository;
+use App\Contracts\Persistence\RestoreTaskRepository;
+use App\Contracts\Persistence\SyncRunRepository;
+use App\Contracts\Persistence\TransactionBoundary;
 use App\Models\SyncRun;
-use Illuminate\Support\Facades\DB;
 
 final class JamfSyncService
 {
-    public function __construct(private DeviceProvider $provider, private DeviceReconciler $reconciler) {}
+    public function __construct(private DeviceProvider $provider, private DeviceReconciler $reconciler, private EmployeeRepository $employees, private RestoreTaskRepository $restorations, private SyncRunRepository $runs, private TransactionBoundary $transactions) {}
 
     public function full(): SyncRun
     {
@@ -18,8 +19,8 @@ final class JamfSyncService
             $snapshot = $this->provider->snapshot();
             $counts['warnings'] = $snapshot->warnings;
             $this->reconciler->validateIdentities($snapshot->devices);
-            foreach ($snapshot->devices as $d) {
-                $this->reconciler->apply($d, $counts);
+            foreach ($snapshot->devices as $device) {
+                $this->reconciler->apply($device, $counts);
             }
             $this->reconciler->removeAbsent($snapshot->devices, $counts);
         });
@@ -41,11 +42,11 @@ final class JamfSyncService
     public function restore(): SyncRun
     {
         return $this->run('restore', function (array &$counts) {
-            // Read once: the mock has no true targeted HTTP endpoint.
+            // The mock has no targeted HTTP endpoint; read its current complete state once.
             $snapshot = $this->provider->snapshot();
             $this->reconciler->validateIdentities($snapshot->devices);
-            foreach (RestoreTask::where('status', 'pending')->where('provider', 'jamf')->get() as $task) {
-                $task->increment('attempts');
+            foreach ($this->restorations->pendingFor('jamf') as $task) {
+                $this->restorations->recordAttempt($task->id);
                 $device = null;
                 foreach ($snapshot->devices as $candidate) {
                     if (($task->provider_device_id && $candidate->providerId === $task->provider_device_id) || (! $task->provider_device_id && $candidate->serial === $task->serial_code)) {
@@ -54,14 +55,14 @@ final class JamfSyncService
                     }
                 }
                 if (! $device) {
-                    $task->update(['status' => 'upstream_missing', 'error' => null]);
+                    $this->restorations->resolve($task->id, 'upstream_missing');
                 } elseif (! $device->email) {
-                    $task->update(['status' => 'upstream_unassigned', 'error' => null]);
+                    $this->restorations->resolve($task->id, 'upstream_unassigned');
                 } elseif (! $device->serial) {
                     throw new \RuntimeException('Cannot restore a source device without a serial.');
                 } else {
                     $this->reconciler->apply($device, $counts);
-                    $task->update(['status' => 'restored', 'error' => null]);
+                    $this->restorations->resolve($task->id, 'restored');
                 }
             }
         });
@@ -69,24 +70,22 @@ final class JamfSyncService
 
     private function run(string $mode, callable $operation): SyncRun
     {
-        $run = SyncRun::create(['provider' => 'jamf', 'mode' => $mode, 'status' => 'in_progress', 'started_at' => now()]);
-        $counts = ['created_assets' => 0, 'updated_assets' => 0, 'unchanged_assets' => 0, 'removed_assets' => 0, 'skipped_unassigned' => 0, 'skipped_missing_serial' => 0, 'created_employees' => 0, 'warnings' => []];
+        $run = $this->runs->start('jamf', $mode);
         try {
-            $counts = DB::transaction(function () use ($operation) {
+            $counts = $this->transactions->withProviderLock('jamf', function () use ($operation) {
+                // Reinitialize counters for each transaction retry, including deadlock recovery.
                 $counts = ['created_assets' => 0, 'updated_assets' => 0, 'unchanged_assets' => 0, 'removed_assets' => 0, 'skipped_unassigned' => 0, 'skipped_missing_serial' => 0, 'created_employees' => 0, 'warnings' => []];
-                DB::table('sync_locks')->where('provider', 'jamf')->lockForUpdate()->first();
-                $before = Employee::count();
+                $before = $this->employees->count();
                 $operation($counts);
-                $counts['created_employees'] = Employee::count() - $before;
+                $counts['created_employees'] = $this->employees->count() - $before;
 
                 return $counts;
             }, 3);
-            $run->update(['status' => 'succeeded', 'completed_at' => now(), 'counters' => $counts]);
-        } catch (\Throwable $e) {
-            $run->update(['status' => 'failed', 'completed_at' => now(), 'error_details' => $e->getMessage()]);
-            throw $e;
-        }
 
-        return $run->fresh();
+            return $this->runs->succeed($run->id, $counts);
+        } catch (\Throwable $error) {
+            $this->runs->fail($run->id, $error->getMessage());
+            throw $error;
+        }
     }
 }

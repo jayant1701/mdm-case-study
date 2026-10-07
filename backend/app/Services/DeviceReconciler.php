@@ -2,81 +2,70 @@
 
 namespace App\Services;
 
+use App\Contracts\Persistence\AssetRepository;
+use App\Contracts\Persistence\DeviceModelRepository;
+use App\Contracts\Persistence\EmployeeRepository;
+use App\Contracts\Persistence\RestoreTaskRepository;
 use App\Data\DeviceRecord;
-use App\Models\Asset;
-use App\Models\AssetAttribute;
-use App\Models\DeviceModel;
-use App\Models\Employee;
-use App\Models\RestoreTask;
 use RuntimeException;
 
 final class DeviceReconciler
 {
+    public function __construct(private AssetRepository $assets, private EmployeeRepository $employees, private DeviceModelRepository $models, private RestoreTaskRepository $restorations) {}
+
     public function validateIdentities(array $devices): void
     {
-        foreach ($devices as $d) {
-            if (! $d->serial) {
+        foreach ($devices as $device) {
+            if (! $device->serial) {
                 continue;
             }
-            $asset = Asset::where('serial_code', $d->serial)->first();
-            if ($asset && ($asset->provider !== 'jamf' || ($asset->provider_device_id !== null && $d->providerId !== null && $asset->provider_device_id !== $d->providerId))) {
-                throw new RuntimeException('Serial is already linked to another provider identity: '.$d->serial);
+            $asset = $this->assets->findBySerial($device->serial);
+            if ($asset && ($asset->provider !== 'jamf' || ($asset->provider_device_id !== null && $device->providerId !== null && $asset->provider_device_id !== $device->providerId))) {
+                throw new RuntimeException('Serial is already linked to another provider identity: '.$device->serial);
             }
-            if ($d->providerId && Asset::where('provider', 'jamf')->where('provider_device_id', $d->providerId)->where('serial_code', '!=', $d->serial)->exists()) {
-                throw new RuntimeException('Provider device ID is already linked to another serial: '.$d->providerId);
+            if ($device->providerId && $this->assets->providerIdentityUsesDifferentSerial('jamf', $device->providerId, $device->serial)) {
+                throw new RuntimeException('Provider device ID is already linked to another serial: '.$device->providerId);
             }
         }
     }
 
-    public function apply(DeviceRecord $d, array &$counts): void
+    public function apply(DeviceRecord $device, array &$counts): void
     {
-        if (! $d->serial) {
+        if (! $device->serial) {
             $counts['skipped_missing_serial']++;
 
             return;
         }
-        if (! $d->email) {
+        if (! $device->email) {
             $counts['skipped_unassigned']++;
-            $counts['removed_assets'] += Asset::where('provider', 'jamf')->where('serial_code', $d->serial)->delete();
+            $counts['removed_assets'] += $this->assets->removeBySerial('jamf', $device->serial);
 
             return;
         }
-        $employee = Employee::firstOrNew(['email' => $d->email]);
-        $employee->fill($d->employee);
-        $employee->save();
-        $model = null;
-        if ($d->model) {
-            $model = DeviceModel::firstOrNew(['manufacturer' => $d->model['manufacturer'], 'model_identifier' => $d->model['model_identifier']]);
-            $model->fill($d->model);
-            $model->save();
-        }
-        $asset = Asset::firstOrNew(['serial_code' => $d->serial]);
-        $new = ! $asset->exists;
-        $asset->fill($d->asset + ['employee_id' => $employee->id, 'device_model_id' => ($d->preserveModel ? $asset->device_model_id : $model?->id), 'provider' => 'jamf', 'provider_device_id' => $d->providerId]);
-        $changed = $asset->isDirty();
-        $asset->save();
-        $specs = AssetAttribute::firstOrNew(['asset_id' => $asset->id]);
-        $specs->fill($d->specifications);
-        $changed = $changed || ! $specs->exists || $specs->isDirty();
-        $specs->save();
-        $counts[$new ? 'created_assets' : ($changed ? 'updated_assets' : 'unchanged_assets')]++;
-        RestoreTask::where('provider', 'jamf')->where('serial_code', $d->serial)->where('status', 'pending')->update(['status' => 'restored', 'error' => null]);
+        $employee = $this->employees->upsertByEmail($device->email, $device->employee);
+        $model = $device->model ? $this->models->upsertIdentity($device->model) : null;
+        $existing = $device->preserveModel ? $this->assets->findBySerial($device->serial) : null;
+        $fields = $device->asset + [
+            'employee_id' => $employee->id,
+            'device_model_id' => $device->preserveModel ? $existing?->device_model_id : $model?->id,
+            'provider' => 'jamf',
+            'provider_device_id' => $device->providerId,
+        ];
+        $result = $this->assets->persistSnapshot($device->serial, $fields, $device->specifications);
+        $counts[$result->created ? 'created_assets' : ($result->changed ? 'updated_assets' : 'unchanged_assets')]++;
+        $this->restorations->markRestoredBySerial('jamf', $device->serial);
     }
 
     public function removeProviderDevice(string $id, array &$counts): void
     {
-        $counts['removed_assets'] += Asset::where('provider', 'jamf')->where('provider_device_id', $id)->delete();
+        $counts['removed_assets'] += $this->assets->removeProviderDevice('jamf', $id);
     }
 
     public function removeAbsent(array $devices, array &$counts): void
     {
-        $serials = array_values(array_filter(array_map(fn ($d) => $d->serial, $devices)));
-        // A skipped row with a missing serial must not accidentally delete its known local device.
-        $protectedIds = array_values(array_filter(array_map(fn ($d) => $d->serial === null ? $d->providerId : null, $devices)));
-        $query = Asset::where('provider', 'jamf')->whereNotIn('serial_code', $serials);
-        if ($protectedIds) {
-            $query->where(fn ($q) => $q->whereNull('provider_device_id')->orWhereNotIn('provider_device_id', $protectedIds));
-        }
-        $counts['removed_assets'] += $query->delete();
+        $serials = array_values(array_filter(array_map(fn ($device) => $device->serial, $devices)));
+        // Policy: skipped rows with a missing serial protect their known provider identity.
+        $protectedIds = array_values(array_filter(array_map(fn ($device) => $device->serial === null ? $device->providerId : null, $devices)));
+        $counts['removed_assets'] += $this->assets->removeOutsideSnapshot('jamf', $serials, $protectedIds);
     }
 }

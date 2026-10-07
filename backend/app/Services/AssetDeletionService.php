@@ -2,28 +2,26 @@
 
 namespace App\Services;
 
-use App\Models\Asset;
-use App\Models\Employee;
-use App\Models\RestoreTask;
-use Illuminate\Support\Facades\DB;
+use App\Contracts\Persistence\AssetRepository;
+use App\Contracts\Persistence\EmployeeRepository;
+use App\Contracts\Persistence\RestoreTaskRepository;
+use App\Contracts\Persistence\TransactionBoundary;
 
 final class AssetDeletionService
 {
-    public function delete(Asset $asset): void
+    public function __construct(private AssetRepository $assets, private EmployeeRepository $employees, private RestoreTaskRepository $restorations, private TransactionBoundary $transactions) {}
+
+    public function delete(int $assetId): void
     {
-        DB::transaction(function () use ($asset) {
-            DB::table('sync_locks')->where('provider', 'jamf')->lockForUpdate()->first();
-            $asset = Asset::findOrFail($asset->id);
-            RestoreTask::updateOrCreate(['provider' => $asset->provider, 'serial_code' => $asset->serial_code], ['provider_device_id' => $asset->provider_device_id, 'deleted_at' => now(), 'status' => 'pending', 'attempts' => 0, 'error' => null]);
-            $asset->delete();
+        $this->transactions->withProviderLock('jamf', function () use ($assetId) {
+            $asset = $this->assets->requireForDeletion($assetId);
+            $this->restorations->recordLocalDeletion($asset);
+            $this->assets->deleteLocal($assetId);
         });
     }
 
-    public function deleteEmployee(Employee $employee): void
+    public function deleteEmployee(int $employeeId): void
     {
-        DB::transaction(function () use ($employee) {
-            DB::table('sync_locks')->where('provider', 'jamf')->lockForUpdate()->first();
-            Employee::findOrFail($employee->id)->delete();
-        });
+        $this->transactions->withProviderLock('jamf', fn () => $this->employees->deleteLocal($employeeId));
     }
 }

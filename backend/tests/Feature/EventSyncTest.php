@@ -6,8 +6,8 @@ use App\Jobs\ProcessDeviceEvent;
 use App\Models\Asset;
 use App\Models\EventInbox;
 use App\Models\SyncRun;
+use App\Services\EventProcessor;
 use App\Services\EventReceiver;
-use App\Services\JamfSyncService;
 use Illuminate\Support\Facades\Queue;
 use Tests\InventoryTestCase;
 
@@ -27,8 +27,8 @@ class EventSyncTest extends InventoryTestCase
         $this->assertDatabaseCount('event_inboxes', 1);
         $inbox = EventInbox::first();
         $job = new ProcessDeviceEvent($inbox->id);
-        $job->handle(app(JamfSyncService::class));
-        $job->handle(app(JamfSyncService::class));
+        $job->handle(app(EventProcessor::class));
+        $job->handle(app(EventProcessor::class));
         $this->assertSame(1, $inbox->fresh()->attempts);
         $this->assertSame('succeeded', $inbox->fresh()->status);
         $this->assertDatabaseCount('assets', 7);
@@ -52,7 +52,7 @@ class EventSyncTest extends InventoryTestCase
         array_pop($this->source['results']);
         $this->source['totalCount'] = 6;
         $this->write();
-        (new ProcessDeviceEvent(EventInbox::first()->id))->handle(app(JamfSyncService::class));
+        (new ProcessDeviceEvent(EventInbox::first()->id))->handle(app(EventProcessor::class));
         $this->assertDatabaseCount('assets', 7);
         $this->assertSame(64.0, Asset::where('provider_device_id', '101')->first()->specifications->ram_gb);
     }
@@ -65,7 +65,7 @@ class EventSyncTest extends InventoryTestCase
         array_shift($this->source['results']);
         $this->source['totalCount'] = 6;
         $this->write();
-        (new ProcessDeviceEvent(EventInbox::first()->id))->handle(app(JamfSyncService::class));
+        (new ProcessDeviceEvent(EventInbox::first()->id))->handle(app(EventProcessor::class));
         $this->assertDatabaseCount('assets', 6);
         $this->assertDatabaseMissing('assets', ['provider_device_id' => '101']);
     }
@@ -78,7 +78,7 @@ class EventSyncTest extends InventoryTestCase
         $inbox = EventInbox::first();
         file_put_contents($this->fixture, 'broken');
         try {
-            (new ProcessDeviceEvent($inbox->id))->handle(app(JamfSyncService::class));
+            (new ProcessDeviceEvent($inbox->id))->handle(app(EventProcessor::class));
             $this->fail('Expected failure.');
         } catch (\RuntimeException $e) {
             $this->assertSame('failed', $inbox->fresh()->status);
@@ -89,7 +89,7 @@ class EventSyncTest extends InventoryTestCase
         }
         $this->write();
         $this->postJson('/api/events/'.$inbox->id.'/retry')->assertStatus(202);
-        (new ProcessDeviceEvent($inbox->id))->handle(app(JamfSyncService::class));
+        (new ProcessDeviceEvent($inbox->id))->handle(app(EventProcessor::class));
         $this->assertSame('succeeded', $inbox->fresh()->status);
         $this->assertSame(2, $inbox->fresh()->attempts);
     }

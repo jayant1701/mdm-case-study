@@ -2,32 +2,34 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Asset;
-use App\Models\Employee;
-use App\Models\SyncRun;
+use App\Contracts\Persistence\AssetRepository;
+use App\Contracts\Persistence\EmployeeRepository;
+use App\Contracts\Persistence\SyncRunRepository;
 use App\Services\AssetDeletionService;
 use App\Services\JamfSyncService;
 
 final class InventoryController extends Controller
 {
+    public function __construct(private AssetRepository $assets, private EmployeeRepository $employees, private SyncRunRepository $runs) {}
+
     public function assets()
     {
-        return Asset::with(['employee', 'deviceModel', 'specifications'])->orderBy('id')->paginate(25);
+        return $this->assets->paginateWithRelations(25);
     }
 
-    public function asset(Asset $asset)
+    public function asset(int $asset)
     {
-        return $asset->load(['employee', 'deviceModel', 'specifications']);
+        return $this->assets->details($asset);
     }
 
     public function employees()
     {
-        return ['data' => Employee::with('assets')->orderBy('email')->get()];
+        return ['data' => $this->employees->listWithAssets()];
     }
 
     public function runs()
     {
-        return ['data' => SyncRun::latest('id')->limit(25)->get()];
+        return ['data' => $this->runs->recent(25)];
     }
 
     public function sync(JamfSyncService $sync)
@@ -40,14 +42,14 @@ final class InventoryController extends Controller
         return $sync->restore();
     }
 
-    public function deleteAsset(Asset $asset, AssetDeletionService $deletion)
+    public function deleteAsset(int $asset, AssetDeletionService $deletion)
     {
         $deletion->delete($asset);
 
         return response()->noContent();
     }
 
-    public function deleteEmployee(Employee $employee, AssetDeletionService $deletion)
+    public function deleteEmployee(int $employee, AssetDeletionService $deletion)
     {
         $deletion->deleteEmployee($employee);
 

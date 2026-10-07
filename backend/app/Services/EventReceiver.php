@@ -2,18 +2,20 @@
 
 namespace App\Services;
 
+use App\Contracts\Persistence\EventInboxRepository;
+use App\Contracts\Persistence\TransactionBoundary;
 use App\Jobs\ProcessDeviceEvent;
 use App\Models\EventInbox;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 final class EventReceiver
 {
+    public function __construct(private EventInboxRepository $events, private TransactionBoundary $transactions) {}
+
     public function accept(array $payload): EventInbox
     {
-        $inbox = DB::transaction(function () use ($payload) {
-            DB::table('sync_locks')->where('provider', 'jamf')->lockForUpdate()->first();
-            $existing = EventInbox::where('event_id', $payload['event_id'])->first();
+        $inbox = $this->transactions->withProviderLock('jamf', function () use ($payload) {
+            $existing = $this->events->findByEventId($payload['event_id']);
             if ($existing) {
                 if ($existing->provider_device_id !== $payload['provider_device_id'] || $existing->type !== $payload['type']) {
                     abort(409, 'Event ID was already used for different content.');
@@ -22,7 +24,7 @@ final class EventReceiver
                 return $existing;
             }
 
-            return EventInbox::create(['event_id' => $payload['event_id'], 'provider' => 'jamf', 'provider_device_id' => $payload['provider_device_id'], 'type' => $payload['type'], 'payload' => $payload, 'status' => 'pending']);
+            return $this->events->recordNotification('jamf', $payload);
         });
         if ($inbox->status === 'pending') {
             $this->dispatch($inbox);
@@ -35,14 +37,14 @@ final class EventReceiver
     {
         try {
             ProcessDeviceEvent::dispatch($inbox->id);
-        } catch (\Throwable $e) {
-            Log::warning('Event dispatch deferred; durable inbox recovery will retry.', ['event_id' => $inbox->event_id, 'error' => $e->getMessage()]);
+        } catch (\Throwable $error) {
+            Log::warning('Event dispatch deferred; durable inbox recovery will retry.', ['event_id' => $inbox->event_id, 'error' => $error->getMessage()]);
         }
     }
 
     public function recover(): int
     {
-        $pending = EventInbox::where('status', 'pending')->orderBy('id')->limit(100)->get();
+        $pending = $this->events->pending(100);
         foreach ($pending as $inbox) {
             $this->dispatch($inbox);
         }
@@ -50,16 +52,13 @@ final class EventReceiver
         return $pending->count();
     }
 
-    public function retry(EventInbox $inbox): EventInbox
+    public function retry(int $id): EventInbox
     {
-        DB::transaction(function () use ($inbox) {
-            DB::table('sync_locks')->where('provider', 'jamf')->lockForUpdate()->first();
-            $record = EventInbox::findOrFail($inbox->id);
-            if ($record->status === 'failed') {
-                $record->update(['status' => 'pending', 'last_error' => null]);
-            }
+        $inbox = $this->transactions->withProviderLock('jamf', function () use ($id) {
+            $record = $this->events->require($id);
+
+            return $record->status === 'failed' ? $this->events->markPending($id) : $record;
         });
-        $inbox->refresh();
         if ($inbox->status === 'pending') {
             $this->dispatch($inbox);
         }
