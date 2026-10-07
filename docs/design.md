@@ -4,7 +4,7 @@
 Deliver Laravel + React + MySQL in Docker Compose. Laravel directly reads the unchanged files/api-mock-response.json; React uses HTTP APIs. Full manual Sync Now imports assigned devices, updates attributes and assignments, recreates deleted records, and yields 7 assets / 6 employees initially. JamfSyncService is our Laravel code, not external Jamf. External Jamf is not modified. Simulated events are separate messages; actual webhook payloads/coverage must be verified later.
 
 ## Architecture and interfaces
-React -> thin Laravel controllers -> JamfSyncService -> DeviceReconciler -> Eloquent/MySQL. DeviceProvider contract exposes snapshot() and findByProviderId(id). JamfMockProvider reads/validates/maps the file to normalized records. All reconciliation uses that common format. JamfSyncService owns locking, run lifecycle and counts. AssetDeletionService owns delete/restore tracking. EventReceiver owns durable intake; queued ProcessDeviceEvent owns execution. Dependency injection binds the provider interface. Single responsibility and dependency inversion guide these boundaries; avoid generic repository wrappers around Eloquent.
+React -> thin Laravel controllers -> JamfSyncService -> DeviceReconciler -> persistence contracts -> Eloquent repositories -> MySQL. DeviceProvider contract exposes snapshot() and findByProviderId(id). JamfMockProvider reads/validates/maps the file to normalized records. All reconciliation uses that common format. JamfSyncService owns locking, run lifecycle and counts. AssetDeletionService owns delete/restore tracking. EventReceiver owns durable intake; queued ProcessDeviceEvent delegates execution policy to EventProcessor. Dependency injection binds the provider and persistence interfaces. Explicit repositories own asset aggregates (including attributes), employees, device models, sync runs, restore tasks, event inbox and provider locks. TransactionBoundary owns nested transaction/lock scopes. Sync decisions stay outside repositories; no generic CRUD base repository is used.
 
 Events flow: receiver -> durable inbox -> Laravel database queue -> worker -> adapter current-device lookup -> transaction reconciliation -> inbox completed. Kafka/gRPC are unnecessary locally. A worker container uses the same Laravel code. Full sync remains for initial import and reconciliation. Mock targeted lookup still reads the full file; it does not claim fewer external reads. Future HTTP adapter could fetch only affected IDs. reportDate is provenance, not an assumed complete checkpoint; purchase date cannot detect later changes.
 
@@ -53,7 +53,7 @@ Verify Jamf event support, signatures, timestamps, batch/targeted endpoints. Add
 ```mermaid
 flowchart TD
     React[React UI] -->|HTTP JSON| API[Laravel controllers]
-    API --> Full[Sync coordinator]
+    API --> Full[JamfSyncService]
     API --> Inbox[Durable event inbox]
     Inbox --> Queue[Database queue]
     Queue --> Worker[Worker]
@@ -61,9 +61,10 @@ flowchart TD
     Full --> Adapter[DeviceProvider / Jamf mock adapter]
     Adapter --> Mock[Unchanged inventory JSON]
     Full --> Reconcile[Device reconciler]
-    Reconcile --> DB[(MySQL)]
+    Reconcile --> Repositories[Persistence contracts / Eloquent repositories]
+    Repositories --> DB[(MySQL)]
     API --> Delete[Atomic local deletion and restore task]
-    Delete --> DB
+    Delete --> Repositories
     DB -->|Pending restorations| Full
 ```
 
@@ -128,4 +129,19 @@ Accept: application/json
 ```
 The mock adapter still reads the file once. Only pending restore identities are reconciled; unrelated inventory is not updated by this operation.
 
+## Explicit persistence layer
 
+Contracts live in `backend/app/Contracts/Persistence`; Eloquent implementations live in `backend/app/Repositories/Eloquent` and are bound through AppServiceProvider.
+
+- AssetRepository owns asset identity queries, relation-aware listing, authoritative-snapshot removal queries and the asset/specifications write aggregate. AssetWriteResult reports persistence changes; DeviceReconciler decides how to count them and which fields to apply.
+- EmployeeRepository and DeviceModelRepository persist identity-keyed, presence-aware updates. The service chooses normalized identities and model-preservation policy.
+- RestoreTaskRepository stores durable local-deletion identities and outcomes. AssetDeletionService places task creation and deletion in one locked transaction.
+- SyncRunRepository stores run lifecycle/diagnostics. JamfSyncService controls when a run starts, succeeds or fails.
+- EventInboxRepository stores notification identity/status/attempts. EventReceiver decides duplicate/conflict/retry policy; EventProcessor decides latest-state execution and failure recovery. The queued job only delegates processing.
+- TransactionBoundary exposes transaction execution and provider-locked transaction execution. DatabaseTransactionBoundary obtains the permanent lock row through ProviderLockRepository inside the same transaction. It preserves nested rollback semantics and fails closed if the lock row is absent; no TTL can expire midway.
+
+Controllers accept identifiers and use repositories instead of implicit route-model persistence. Application services, controllers and jobs contain no direct Eloquent queries or model save/update/delete calls. Laravel's internal queue implementation remains unchanged.
+
+This is a pragmatic persistence boundary: contracts return Eloquent models and Laravel collections/paginators as data records, so they are not fully independent of Laravel. Services only read those records. A future ORM replacement would require DTO/domain-record migration as well as new repository implementations.
+
+The schema stays in `backend/database/migrations`. Repositories do not create tables. Existing behavior remains covered, with additional injected repository failures proving atomic local deletion and rollback when inbox acknowledgment fails after a device update.

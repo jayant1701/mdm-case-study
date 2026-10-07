@@ -35,7 +35,7 @@ POST it to `/api/events/jamf`. Supported types are `device.changed` and `device.
 
 ## Design decisions
 
-- A provider interface separates Jamf mapping from transactional reconciliation; controllers stay thin. Eloquent handles persistence directly without unnecessary repository wrappers.
+- A provider interface separates Jamf mapping from transactional reconciliation; controllers stay thin. Services depend on explicit persistence contracts; Eloquent repositories own queries and writes. The asset repository persists the asset/specifications aggregate. TransactionBoundary owns transaction scopes and obtains a permanent provider row lock through ProviderLockRepository. Sync policy stays in services.
 - Employee email and asset serial are normalized unique business keys, with internal IDs as primary keys. Device models share manufacturer/model identifier/name; each asset has separate mutable RAM/storage/processor/core/battery attributes. No assignment join table: an asset has one current employee.
 - MySQL enforces foreign keys and unique constraints. Full sync, targeted updates, events, and local deletes use the same permanent provider row with a transaction-scoped lock. It cannot expire midway like a TTL lock. SQLite tests do not establish MySQL lock behavior.
 - Snapshot envelope validation, duplicate identity checks and existing identity collision checks happen before destructive writes. Invalid nonempty email fails rather than masquerading as unassignment. Missing serial rows are skipped and known provider identities protected from absence removal.
@@ -62,7 +62,7 @@ POST it to `/api/events/jamf`. Supported types are `device.changed` and `device.
 
 ## Verification
 
-The portable PHP suite passes **17 tests / 84 assertions** covering first/repeated sync, reassignment and RAM, separate configuration for shared models, null/missing fields, identity conflicts, incomplete snapshot protection, local asset/employee deletion, restoration, unassignment/absence, durable receipt, duplicate/conflicting events, latest-state processing, failure/retry, and pending-inbox recovery. React production build passes.
+The portable PHP suite passes **20 tests / 103 assertions** covering first/repeated sync, reassignment and RAM, separate configuration for shared models, null/missing fields, identity conflicts, incomplete snapshot protection, local asset/employee deletion, restoration, unassignment/absence, durable receipt, duplicate/conflicting events, latest-state processing, failure/retry, pending-inbox recovery, repository substitution failures during deletion/event acknowledgment, and fail-closed handling of a missing lock row. React production build passes.
 
 Docker images and Compose startup were verified with real MySQL: migrations, full 7/6 import, unchanged repeat, asset delete/targeted restore, employee delete/recreation, and a real database-queue worker processing a duplicate notification only once. Browser validation and further integration results are recorded in the handoff report.
 
@@ -80,7 +80,10 @@ The default tests use SQLite in memory and an isolated temporary copy of the fix
 
 The mock's targeted lookup still reads the complete local file. It reduces writes, not external API reads. A future real adapter could use individual/batch lookups, verified provider events, incremental cursors and periodic reconciliation. Purchase date cannot detect later updates. Kafka, gRPC, serverless deployment, tenant scoping, real credentials/webhook signatures, scheduled reconciliation and assignment history are outside this local implementation.
 
+Repository contracts intentionally return Eloquent models and Laravel collections/paginators as data records. Services do not query or mutate their persistence state, but this remains framework coupling rather than a completely ORM-independent domain model. Database schema remains in `backend/database/migrations`; no schema moves into repositories. Laravel manages its own queue persistence internally.
+
 The queue is at-least-once, not exactly-once transport: transactions and idempotent processing make duplicate delivery safe. Pending inbox recovery covers dispatch gaps. A hard process termination may leave a historical run `in_progress`; production would add stale-run cleanup and monitoring. Restore task outcomes are terminal until another local deletion/full source reconciliation; no scheduled restore loop is claimed.
 
 No GitHub repository was published and no reviewer permissions were changed.
+
 
