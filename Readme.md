@@ -104,13 +104,17 @@ For a multi-customer product, add `company_id` to identities and queries so two 
 
 ### Recommendation
 
-Use event-driven synchronization for provider changes: commit provider state and an outbox event together, publish the event to Kafka, then apply it through a durable inventory inbox. This avoids transferring the complete fleet for every change, handles bursts and lets the provider and inventory services recover independently.
+Use event-driven synchronization for normal provider changes. The Kafka consumer waits continuously for small change events, so updates do not depend on a user clicking a button and the complete fleet is not transferred for each change. Kafka also buffers bursts and lets the provider and inventory services recover independently. The consumer polls Kafka only; it does not poll Jamf.
 
-The Kafka consumer runs continuously and waits for queued events. It does not poll Jamf or request the full device list. Making it wait for a user to click **Sync Now** would turn automatic event handling into user-triggered batch processing.
+| Operation | Trigger | Purpose |
+|---|---|---|
+| Kafka event processing | Continuous | Apply individual provider changes automatically |
+| Process pending notifications | Automatic publisher or Activity button | Retry saved provider outbox notifications that have not reached Kafka |
+| Sync Now | User button | Fetch the complete Jamf snapshot and make MySQL match it |
 
-**Sync Now** implements the required provider-fetch workflow: React calls the Laravel inventory API, Laravel asks the Jamf adapter for the provider's complete current device list, and Laravel compares that list with MySQL. In healthy operation, Kafka has already applied every change and Sync Now finds no differences. It remains a manual safety check that can bootstrap or rebuild inventory and correct drift.
+Sync Now implements the assignment's provider-fetch workflow. It restores locally deleted assets and employees that still exist and remain assigned upstream, creates other missing assigned records, applies changed values, and removes local assets that are absent or unassigned upstream. It does not publish outbox rows to Kafka.
 
-Outbox retry repairs only a saved notification that has not reached Kafka. It cannot discover a provider change that never entered the outbox, an event no longer available from Kafka, a rejected event, or a locally deleted record that has not changed upstream. A complete provider fetch can detect those differences. Kafka events therefore handle normal individual changes automatically, while Sync Now verifies the complete result.
+In healthy operation, Kafka has already applied every change and Sync Now finds no differences. The complete fetch remains useful because outbox retry cannot discover a provider change that never entered the outbox, an event no longer available from Kafka, a rejected event, or a locally deleted record that has not changed upstream.
 
 ### Delivered scope
 
