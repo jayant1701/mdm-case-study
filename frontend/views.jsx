@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 
 export function AssetList({ assets, busy, onDetails, onDelete }) {
   return (
@@ -135,26 +135,19 @@ export function Activity({
   onRefresh,
   onRetry,
 }) {
-  const [deviceId, setDeviceId] = useState("101");
   return (
     <>
       <h2>Simulated provider notifications</h2>
       <p>
-        This is our demo schema, not a real Jamf webhook. Edit the mounted
-        source file first, then notify its device ID. Latest source state is
-        always fetched.
+        Edit the mounted source JSON, then scan for meaningful changes. Complete
+        device state is queued, so the worker does not fetch the source again.
+        Changes to report date or last contact alone produce no notification.
+        Full Sync Now establishes a baseline; unchanged scans emit nothing.
       </p>
-      <label>
-        Provider device ID{" "}
-        <input value={deviceId} onChange={(e) => setDeviceId(e.target.value)} />
-      </label>
       <div className="controls">
-        <button
-          disabled={busy || !deviceId.trim()}
-          onClick={() => onSend(deviceId.trim())}
-        >
-          Send simulated change
-        </button>
+        <button disabled={busy} onClick={onSend}>
+          Scan source and queue changes
+        </button>{" "}
         <button disabled={busy} onClick={onRestore}>
           Restore locally deleted assets
         </button>
@@ -170,7 +163,8 @@ export function Activity({
             {e.provider_device_id}: {e.status}
           </strong>
           <p>
-            {e.event_id} · attempts {e.attempts}
+            {e.type} · version {e.version} · generation {e.producer_generation}{" "}
+            · {e.outcome || e.status} · attempts {e.attempts}
           </p>
           {e.last_error && <p className="error">{e.last_error}</p>}
           {e.status === "failed" && (

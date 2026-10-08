@@ -86,22 +86,14 @@ function App() {
       setTab("assets");
     });
   }
-  async function sendEvent(deviceId) {
+  async function sendEvent() {
     await action(async () => {
-      await request("/events/jamf", {
-        method: "POST",
-        body: JSON.stringify({
-          event_id: crypto.randomUUID(),
-          provider_device_id: deviceId,
-          type: "device.changed",
-        }),
-      });
+      const result = await request("/simulator/jamf", { method: "POST" });
       setNotice(
-        "Notification accepted. The worker processes it asynchronously. Refresh activity to see progress.",
+        `${result.emitted} state notifications queued. Timestamp-only changes are ignored. Refresh activity after the worker processes them.`,
       );
     });
   }
-
   return (
     <main>
       <header>
