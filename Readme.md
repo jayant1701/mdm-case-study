@@ -69,7 +69,7 @@ One employee can own several assets. Each asset has at most one current employee
 | Direct outbox-to-HTTP | Simpler for one consumer; Kafka provides retained replay and burst buffering |
 | Kafka event-driven synchronization | Chosen with a transactional outbox for durable delivery, replay, burst buffering and separation between services |
 | Serverless alternative | Viable with a different technology stack; described at the end of this document |
-| Provider version/hash feed | Useful future option: request only device IDs and change tokens, then fetch the devices whose token changed; unavailable in the supplied contract |
+| Changed-device list API | Useful future option: ask the provider which device IDs changed, then fetch only those devices; unavailable in the supplied contract |
 
 ### Back-of-the-envelope estimate
 
@@ -97,14 +97,7 @@ A complete-state event is assumed to use 1.75 KB more than an ID-only event: `2 
 
 Only the retained portion occupies Kafka storage at one time. With 30-day retention, one stored copy adds approximately `annual difference × 30 ÷ 365`, or 0.016 GB to 1.58 GB. Three replicated copies would use approximately 0.047 GB to 4.75 GB. Three copies are a production planning assumption; the local Docker environment runs one Kafka broker and stores one copy.
 
-The larger rate of 12 to 1,157 events per second is a separate stress scenario in which every device changes once every day:
-
-| Total devices | Calculation | Average events/second |
-|---|---|---:|
-| 1 million | `1,000,000 ÷ 86,400 seconds` | 11.6, rounded to 12 |
-| 100 million | `100,000,000 ÷ 86,400 seconds` | 1,157.4, rounded to 1,157 |
-
-This daily-change scenario is deliberately much higher than the expected 11% annual change rate. It tests burst and scale behavior; it is not the expected workload. Routine `reportDate` and contact-time changes are excluded from the event fingerprint so they do not create unnecessary events.
+The estimate stays with the expected 11% annual change rate. Routine `reportDate` and contact-time changes are excluded from the event fingerprint so they do not create unnecessary events.
 
 At 2 KB per device, one complete fleet import transfers about 2 GB to 200 GB. Repeating that every day transfers about 730 GB to 73 TB per year, mostly unchanged data. Normal changes should therefore use individual events, while a complete snapshot remains useful for initial import and occasional recovery.
 
