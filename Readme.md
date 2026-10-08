@@ -8,7 +8,7 @@
    - [Requirements and implementation decisions](#requirements-and-implementation-decisions)
    - [Back-of-the-envelope estimate](#back-of-the-envelope-estimate)
    - [Solutions considered](#solutions-considered)
-   - [Recommended Kafka event-driven solution](#recommended-kafka-event-driven-solution)
+   - [Recommended solution](#recommended-solution)
      - [Three synchronization paths](#three-synchronization-paths)
    - [Delivered scope](#delivered-scope)
 2. [Remaining scope](#2-remaining-scope)
@@ -33,7 +33,7 @@
    - [Full reconciliation](#full-reconciliation)
    - [Provider Lab](#provider-lab)
    - [Device and shared ordering checkpoints](#device-and-shared-ordering-checkpoints)
-   - [Why outbox, Kafka and inbox are all present](#why-outbox-kafka-and-inbox-are-all-present)
+   - [Why the transport, outbox and inbox are all present](#why-the-transport-outbox-and-inbox-are-all-present)
 7. [Data model](#7-data-model)
    - [Inventory database](#inventory-database)
    - [Provider database](#provider-database)
@@ -65,7 +65,7 @@ The supplied task asks for a Laravel, React and MySQL application that:
 - reflects assignment and attribute changes, such as a RAM update;
 - runs locally with Docker Compose.
 
-The repository keeps that required JSON-import workflow and adds a mock provider service to demonstrate a production-oriented design. Normal provider changes travel as Kafka events. **Sync Now** retries pending delivery and compares inventory with a complete provider snapshot, so it can repair missed events and restore records deleted only from the local database.
+The repository keeps the required JSON-import workflow and adds a separate mock provider service. The alternatives and recommended synchronization design are explained below.
 
 ### Definitions
 
@@ -85,7 +85,7 @@ The repository keeps that required JSON-import workflow and adds a mock provider
 | Recreate locally deleted data | Full reconciliation recreates assigned upstream devices and employees |
 | Delete only local data from the UI | UI deletion never calls the provider delete endpoint |
 | Laravel, React and MySQL | Provided through Docker Compose |
-| Future providers | Provider contracts have concrete Jamf/mock adapters |
+| Future providers | Generic provider contracts have fixture and mock-provider HTTP adapters; a real Jamf adapter remains future scope |
 
 One employee can own several assets. Each asset has at most one current employee, so `assets.employee_id` is sufficient. A join table would be needed for assignment history or simultaneous many-to-many ownership.
 
@@ -96,39 +96,19 @@ These are planning assumptions from the design discussion, not assignment facts 
 - 100 customers;
 - 10,000 to 1,000,000 devices per customer: 1 million to 100 million devices in total;
 - 10% annual additions/departures plus 1% replacements;
-- one event per affected device: 11% of the fleet per year;
-- 2 KB per complete-state event and 250 bytes, or 0.25 KB, per ID-only event.
+- for planning, one meaningful change per affected device: 11% of the fleet per year;
+- approximately 2 KB transferred per device in a complete inventory response.
 
 The expected annual change volume is:
 
-| Total devices | Calculation | Events/year | Average events/second |
+| Total devices | Calculation | Affected devices/year | Average changes/second |
 |---|---|---:|---:|
 | 1 million | `1,000,000 × 11%` | 110,000 | `110,000 ÷ 31,536,000 = 0.0035` |
 | 100 million | `100,000,000 × 11%` | 11 million | `11,000,000 ÷ 31,536,000 = 0.35` |
 
-A complete-state event is assumed to use 1.75 KB more than an ID-only event: `2 KB - 0.25 KB = 1.75 KB`.
+At 2 KB per device, one complete fleet import transfers about 2 GB to 200 GB. Repeating that every day transfers about 730 GB to 73 TB per year, mostly unchanged data.
 
-| Events/year | Complete events at 2 KB | ID-only events at 0.25 KB | Difference |
-|---:|---:|---:|---:|
-| 110,000 | 0.22 GB/year | 0.0275 GB/year | `110,000 × 1.75 KB ≈ 0.19 GB/year` |
-| 11 million | 22 GB/year | 2.75 GB/year | `11,000,000 × 1.75 KB ≈ 19.25 GB/year` |
-
-Only the retained portion occupies Kafka storage at one time. With 30-day retention, one stored copy adds approximately `annual difference × 30 ÷ 365`, or 0.016 GB to 1.58 GB. Three replicated copies would use approximately 0.047 GB to 4.75 GB. Three copies are a production planning assumption; the local Docker environment runs one Kafka broker and stores one copy.
-
-Only meaningful device changes count toward the 11% estimate. Routine `reportDate` and contact-time changes do not create events.
-
-At 2 KB per device, one complete fleet import transfers about 2 GB to 200 GB. Repeating that every day transfers about 730 GB to 73 TB per year, mostly unchanged data. Normal changes should therefore use individual events, while a complete snapshot remains useful for initial import and occasional recovery.
-
-The expected average rate alone does not require Kafka. Kafka was selected because it retains events on disk, supports replay, absorbs bursts and allows the provider and inventory services to run independently.
-
-The expected load does not justify extra consumer partitions or database shards in this case study. Future changes should follow measurements:
-
-- slow pending-row selection: add a composite outbox index for the actual query, such as status, retry time and ID;
-- growing consumer lag: add partitions and consumers;
-- one provider/customer being throttled: schedule work fairly by company;
-- measured database throughput or storage limit: consider company-based sharding.
-
-For a multi-customer product, add `company_id` to identities and queries so two companies can safely have the same email, serial or provider ID and cannot access each other's data. This is a data-isolation requirement before it is a sharding strategy.
+Only meaningful device changes count toward the 11% estimate. Routine `reportDate` and contact-time changes are stored but should not trigger synchronization by themselves. The calculation shows why repeated full-inventory synchronization is expensive and motivates evaluating incremental approaches.
 
 ### Solutions considered
 
@@ -142,28 +122,37 @@ The choices cover separate parts of the problem: detecting changes, deciding wha
 | Change detection | Increasing device ID | Reject; misses edits, unassignments and removals |
 | Change detection | Purchase-date filter | Reject; later changes do not alter purchase date |
 | Change detection | Changed-device list API | Useful future option: ask the provider which device IDs changed, then fetch only those devices; unavailable in the supplied contract |
-| Event contents | ID-only event plus provider GET | Smaller event, but every event needs another provider request |
-| Event contents | Complete-state event | Supports replay without a provider read, but uses more event storage |
-| Event contents | Changed-fields-only event | Smaller, but partial merging makes ordering and replay harder |
-| Event delivery | Direct outbox-to-HTTP | Simpler for one consumer, but lacks retained replay and burst buffering |
+| Notification contents | ID-only notification plus provider GET | Smaller notification, but every change needs another provider request |
+| Notification contents | Complete-device notification | Supports replay without a provider read, but uses more storage |
+| Notification contents | Changed-fields notification | Smaller, but partial merging makes ordering and replay harder |
+| Notification delivery | Direct outbox-to-HTTP | Simple for one consumer, but replay and buffering remain tied to the provider database rather than an independent retained stream |
 | Deployment | Serverless alternative | Viable with a different technology stack; described at the end of this document |
 
-### Recommended Kafka event-driven solution
+### Recommended solution
 
-Use event-driven synchronization for normal provider changes. The Kafka consumer waits continuously for small change events, so updates do not depend on a user clicking a button and the complete fleet is not transferred for each change. The consumer polls Kafka only; it does not poll Jamf.
+I recommend Kafka-based event-driven synchronization for normal provider changes, with complete snapshot reconciliation for recovery. The average traffic estimate does not require Kafka by itself. Kafka is selected because it stores events for replay, buffers bursts and lets the provider and inventory services operate independently.
 
 The normal event path is:
 
 1. A provider device is added, changed, unassigned or removed.
 2. The provider stores the device change and an outbox row in the same MySQL transaction.
-3. The outbox publisher sends the complete-state event to Kafka. A failed publication leaves the outbox row pending for retry.
+3. The outbox publisher sends a complete-device event to Kafka. A failed publication leaves the outbox row pending for retry.
 4. Kafka retains the event on disk and makes it available to the inventory consumer.
 5. The consumer stores the event in the inventory inbox before acknowledging its Kafka offset.
-6. The inventory worker applies the event through the provider adapter and records its result.
+6. The inventory worker applies the saved event to local inventory and records the result.
 
 Kafka retains records for a configured period; the local environment keeps them for seven days on a Docker volume. This supports replay and lets the inventory service catch up after an outage. Kafka cannot join the provider's MySQL transaction, so the outbox closes the gap between saving a provider change and publishing its event. The inventory inbox closes the gap between receiving an event and applying it. Device versions and event IDs make retries safe and prevent an older event from overwriting newer state.
 
-The design uses Kafka for durable asynchronous communication and burst handling. The calculated average throughput could also be handled by a simpler queue or direct delivery with an outbox. Kafka is chosen here to demonstrate retained replay, independent service operation and a path to multiple consumers; the capacity estimate does not claim that Kafka is required by throughput alone.
+For event-size planning, assume 2 KB for a complete-device event and 250 bytes, or 0.25 KB, for an ID-only event. The calculations use decimal KB and GB.
+
+| Changes/year | Complete-device events | ID-only events | Additional complete-event data |
+|---:|---:|---:|---:|
+| 110,000 | 0.22 GB/year | 0.0275 GB/year | `110,000 × 1.75 KB ≈ 0.19 GB/year` |
+| 11 million | 22 GB/year | 2.75 GB/year | `11,000,000 × 1.75 KB ≈ 19.25 GB/year` |
+
+With 30-day retention, the additional data occupies approximately `annual difference × 30 ÷ 365`: 0.016 GB to 1.58 GB for one stored copy, or 0.047 GB to 4.75 GB for three copies. Three copies are a production planning assumption. The local environment has one broker and one copy.
+
+The estimated average rate does not justify database sharding or additional consumer capacity in this case study. Add outbox indexes when pending-row queries become slow, add Kafka partitions and consumers when measured lag grows, and consider company-based sharding only when database measurements require it.
 
 #### Three synchronization paths
 
@@ -175,14 +164,7 @@ The design uses Kafka for durable asynchronous communication and burst handling.
 
 The automatic event path is the recommended normal operation. The fixture import remains available for the assignment, and Sync Now provides explicit recovery and reconciliation.
 
-Continuous Kafka polling is better than relying only on Sync Now for normal changes because it:
-
-- does not wait for a user to notice a change and click a button;
-- reads only queued change events rather than fetching the complete provider inventory;
-- lets Kafka retain events while the inventory service is unavailable;
-- buffers bursts so the worker can process them at its available rate.
-
-The consumer polls Kafka with a blocking wait; it does not repeatedly query Jamf. Sync Now remains better for completeness because an event stream cannot prove that the entire local inventory matches the provider or rediscover a locally deleted record when nothing changed upstream.
+The consumer waits for Kafka records; it does not repeatedly query Jamf. This applies changes without waiting for a user or transferring unchanged devices. Sync Now remains necessary because an event stream cannot prove that the entire local inventory matches the provider or rediscover a locally deleted record when nothing changed upstream.
 
 Sync Now is implemented as follows:
 
@@ -194,11 +176,13 @@ Sync Now is implemented as follows:
 6. `DeviceReconciler` creates or updates assigned assets and employees, restores valid local deletions, and removes assets that are absent, removed or unassigned upstream.
 7. `JamfSyncService` stores the reconciliation and outbox counters in `sync_runs`.
 
+Outbox publication and snapshot retrieval are separate provider calls. A successful publication is not rolled back if the later snapshot fails. In healthy operation, the event path has already applied every change and Sync Now finds no differences. The complete snapshot can still recover a locally deleted record, an event that was missed or expired, or a change that never entered the outbox.
+
 Key decisions:
 
 | Question | Decision | Reason |
 |---|---|---|
-| How are normal changes synchronized? | Complete-state events | Transfer only changed devices and replay without a provider lookup |
+| How are normal changes synchronized? | Complete-device events | Transfer only changed devices and replay without a provider lookup |
 | How are provider/local differences repaired? | Complete snapshot reconciliation | Recover missed events, local deletions and an empty inventory |
 | Why Kafka? | Persistent event transport | Retained replay, burst buffering and service independence |
 | Why a MySQL outbox when Kafka persists events? | Transactional outbox | Kafka cannot participate in the provider's MySQL transaction |
@@ -206,10 +190,6 @@ Key decisions:
 | How are duplicates and late events handled? | Event ID, device version and provider generation | Make at-least-once delivery safe and prevent older state from winning |
 | How are provider differences isolated? | Adapter interfaces | Keep Jamf-specific HTTP and response mapping outside synchronization rules |
 | How is repeated model data reduced? | Device model plus per-asset attributes | Share fixed model configuration while keeping RAM, storage and battery per asset |
-
-Sync Now first asks the provider to publish up to ten pending outbox notifications to Kafka. It then implements the assignment's provider-fetch workflow. It restores locally deleted assets and employees that still exist and remain assigned upstream, creates other missing assigned records, applies changed values, and removes local assets that are absent or unassigned upstream. The sync result records how many notifications were published, failed or remain pending. Outbox publication and snapshot retrieval are separate provider calls; a successful publication is not rolled back if the later snapshot fails.
-
-In healthy operation, Kafka has already applied every change and Sync Now finds no differences. The complete fetch remains useful because outbox retry cannot discover a provider change that never entered the outbox, an event no longer available from Kafka, a rejected event, or a locally deleted record that has not changed upstream.
 
 ### Delivered scope
 
@@ -395,7 +375,7 @@ Provider Lab writes provider state and a durable outbox notification. The normal
 
 The automatic event path does not read the fixture. **Sync Now** retries pending outbox delivery and reads the provider's current HTTP snapshot, not the file.
 
-Reset removes the reset-generated outbox rows and clears inventory. Sync Now then repopulates inventory from the current snapshot. An event already in Kafka can arrive between reset and Sync Now because the provider, Kafka and inventory are separate systems. Provider generations and device versions remain monotonic, so an older event cannot overwrite the reconciled snapshot.
+Reset clears the provider outbox, reloads provider state from the fixture without leaving reset notifications, and clears local inventory. Sync Now then repopulates inventory from the current snapshot. An event already in Kafka can arrive between reset and Sync Now because the provider, Kafka and inventory are separate systems. Provider generations and device versions remain monotonic, so an older event cannot overwrite the reconciled snapshot.
 
 ### Source-field mapping
 
@@ -508,7 +488,7 @@ React Sync Now
   -> inventory tables and SyncRun counters
 ```
 
-Full reconciliation is required for initial import and recovery. It is manual in this case study. Absence counts as removal only in a validated complete snapshot. A real paginated adapter must read every page before applying that rule.
+Complete reconciliation supports the assignment's direct fixture import and recovery from missed events or local deletions. It is manual in this case study. Absence counts as removal only in a validated complete snapshot. A real paginated adapter must read every page before applying that rule.
 
 A snapshot older than an already applied event is rejected. An equal version with different meaningful state is also rejected. Reconciliation records current versions so a delayed event cannot reverse the snapshot.
 
@@ -553,7 +533,7 @@ The second event may contain a valid update for device `103`, so the device port
 
 `provider + kind + identity` is unique. Older generations cannot update shared fields. The same generation with a different fingerprint is rejected. The table holds only the latest ordering checkpoint; actual records remain in `employees` and `device_models`.
 
-### Why outbox, Kafka and inbox are all present
+### Why the transport, outbox and inbox are all present
 
 MySQL and Kafka cannot participate in one atomic transaction in this design.
 
@@ -723,7 +703,7 @@ React on S3/CloudFront
   -> Lambda inventory worker
 ```
 
-SQS is sufficient for the estimated traffic and simpler to operate than Kafka. Use FIFO message groups only if strict queue-level device ordering is required; versions and idempotency remain necessary. EventBridge Scheduler can run reconciliation and the outbox relay. Cognito or an existing identity provider can carry the authenticated company identity.
+SQS is likely sufficient for the estimated average traffic and is simpler to operate than Kafka, but burst and ordering requirements still need validation. Use FIFO message groups only if strict queue-level device ordering is required; versions and idempotency remain necessary. EventBridge Scheduler can run reconciliation and the outbox relay. Cognito or an existing identity provider can carry the authenticated company identity.
 
 This illustrative monthly event-path estimate uses 9,167 to 916,667 events, public US pricing, a 2 KB message, a 512 MB Lambda running for 500 ms, one HTTP API request and three SQS operations per event. Free tiers are excluded.
 
