@@ -145,3 +145,19 @@ Controllers accept identifiers and use repositories instead of implicit route-mo
 This is a pragmatic persistence boundary: contracts return Eloquent models and Laravel collections/paginators as data records, so they are not fully independent of Laravel. Services only read those records. A future ORM replacement would require DTO/domain-record migration as well as new repository implementations.
 
 The schema stays in `backend/database/migrations`. Repositories do not create tables. Existing behavior remains covered, with additional injected repository failures proving atomic local deletion and rollback when inbox acknowledgment fails after a device update.
+
+## Finalized state-carrying notification upgrade
+
+This replaces the earlier ID-only notification demo. The simulator is our producer, not a claim about real Jamf guarantees. Required full sync and local restoration continue reading the supplied JSON directly.
+
+POST `/api/simulator/jamf` compares a validated normalized snapshot against a durable producer baseline. First observation emits added (or unassigned); semantic changes emit changed/unassigned; disappearance emits removed using the previous complete device payload. Reappearance emits added. Per-device versions increase monotonically, including removals. Fingerprints ignore reportDate/report_date and lastContactTime; timestamp-only changes emit nothing, but assignment/hardware changes emit even when timestamps remain unchanged. Only application-relevant normalized fields participate.
+
+The producer baseline and complete pending inbox/outbox messages commit together under the provider transaction lock. Queue dispatch happens afterward; existing pending recovery closes dispatch gaps. Initial simulation emits all seven records. Source identity gaps fail the simulation rather than invent removal. Worker processing never reads the provider/file: it validates and applies stored state directly.
+
+Envelope: `event_id`, `provider_device_id`, positive integer `version`, `type` (`device.added`, `device.changed`, `device.unassigned`, `device.removed`), and complete normalized `device` state. Removed messages retain last-known state but explicitly signal removal; unassigned state has null email. This is a simulator contract, not Jamf's webhook schema.
+
+Consumer state survives asset deletion: provider/device key, last applied version, content fingerprint, serial and tombstone/state. Older versions succeed as ignored; equal identical versions are duplicates; equal conflicting content is rejected. Inbox receipt rejects conflicting event IDs or device/version reuse and persists before 202. A newer removal/unassignment updates its tombstone in the same transaction as asset removal; stale updates cannot recreate it. A new higher-version assignment can recreate it. Global serial/provider identity checks remain in reconciliation.
+
+Full sync is an explicit authoritative reconciliation. Before writes it atomically advances producer baseline and consumer watermarks to the current semantic snapshot, emitting durable messages as needed. That fences already queued older payloads from undoing manual full sync. No heartbeat-based cursor is claimed. Targeted local restoration remains independent; producer versions do not change because an asset was deleted locally.
+
+Repository additions own producer baseline and consumer watermarks. Version policy, simulation diff and lifecycle decisions remain in services. MySQL schema stays in migrations. Tests must establish file/provider independence of workers, ignored timestamps, changed hardware with identical timestamps, duplicate/conflicting/stale versions, tombstones, rollback and durable producer consistency.
