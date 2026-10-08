@@ -56,7 +56,7 @@ One employee can own several assets. Each asset has at most one current employee
 
 ### Solutions considered
 
-| Solution | Decision |
+| Solution | Use / drawback |
 |---|---|
 | Full synchronization | Keep for initial import and recovery; wasteful for every change |
 | Scheduled polling | Simple fallback, but repeatedly transfers unchanged data |
