@@ -74,11 +74,8 @@ function App() {
   }
   async function sync() {
     await action(async () => {
-      const r = await request("/sync/provider", { method: "POST" });
-      const c = r.counters;
-      setNotice(
-        `Sync complete: ${c.created_assets} created, ${c.updated_assets} updated, ${c.unchanged_assets} unchanged, ${c.removed_assets} removed. ${c.warnings.length} warnings.`,
-      );
+      setNotice("");
+      await request("/sync/provider", { method: "POST" });
     });
   }
   async function remove(kind, id) {
