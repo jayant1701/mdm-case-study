@@ -131,10 +131,10 @@ The deterministic **Simulate Kafka failure** button does not shut down Kafka. It
 | ID-only event followed by provider GET | Valid and smaller on Kafka, but adds a provider request and depends on provider availability |
 | Complete-state event | Chosen; the worker can process a stored event without a provider read |
 | Changed-fields-only event | Not chosen; merging partial messages makes ordering and replay harder |
-| Webhook | A possible delivery trigger, but a webhook is not persistent by itself. It still needs a durable sender/outbox, idempotent receiver and reconciliation |
+| Webhook | A possible provider callback. Before using one, verify its contract: event types, payload, authentication/signature, retries, timeout, ordering, duplicate behavior and deletion representation. A webhook request is not durable storage by itself, so the receiver still needs an inbox, idempotency and reconciliation |
 | Direct outbox-to-HTTP delivery | Simpler for one consumer and a reasonable alternative; Kafka was chosen to demonstrate burst buffering and replay |
 | Kafka | Implemented with the transactional outbox. The estimated average load alone does not require Kafka |
-| Serverless consumer | Possible deployment choice for bursty work, but not implemented and does not change the event contract |
+| Serverless deployment | A reasonable alternative for bursty work. API Gateway, Lambda and SQS can replace always-running API/worker/Kafka containers while retaining durable delivery and reconciliation. It is described below but is not implemented |
 | gRPC | Not used. Typed calls do not solve change detection or persistence; HTTP is sufficient for query/control traffic here |
 | Version/hash list or batch API | Useful future optimization for reconciliation, but not part of the supplied provider contract |
 
@@ -161,7 +161,42 @@ Complete events add about 0.19 GB to 19.25 GB per year over ID-only events. With
 
 If every device created one event per day, the average would rise to about 12 to 1,157 events per second. This is why routine contact timestamps are excluded from the event fingerprint. Kafka can absorb a temporary burst, but database and worker capacity still determine how fast the backlog clears.
 
-At larger scale, add `company_id` to all identities and event keys. Partition workers by company or company group, and shard the database only after measurement shows it is needed. Company scoping and sharding are design considerations, not implemented features.
+The calculated average load does not justify Kafka consumer expansion or database sharding. If this becomes a multi-customer product, add `company_id` so the same email, serial number or provider device ID may safely exist in different companies and every query is restricted to the authenticated company. This is a data-isolation requirement before it is a scaling technique.
+
+If measurements later show that one company is delaying others, index and schedule outbox work by company first. Kafka keys can include `company_id|provider|provider_device_id`, and consumers can be divided by company or company group. A provider or inventory database can then be sharded by company. Sharding is deliberately deferred until throughput, storage or provider-throttling measurements justify its operational cost.
+
+## Alternative serverless deployment
+
+The same application boundary could be deployed with managed, usage-based services:
+
+```text
+React on S3/CloudFront
+  -> API Gateway HTTP API
+  -> Lambda provider/API functions
+  -> Aurora MySQL Serverless (provider state, inventory and durable outbox/inbox)
+  -> scheduled Lambda outbox publisher
+  -> SQS with a dead-letter queue
+  -> Lambda inventory worker
+  -> Aurora MySQL Serverless
+```
+
+SQS is enough for the calculated traffic and is simpler to operate than a Kafka cluster. Use a FIFO message group based on company and device only if strict per-device queue ordering is required; the existing versions and idempotency rules are still required. EventBridge Scheduler can run reconciliation and the outbox relay. Cognito or an existing identity provider can authenticate users and carry their company identity. This deployment keeps the provider adapter and application services; it changes infrastructure, not the domain model.
+
+The following monthly event-path estimate uses the README assumptions, 9,167 to 916,667 events per month, and public US pricing. It assumes one 2 KB event, a 512 MB Lambda running for 500 ms, one HTTP API request and three SQS operations per event. It excludes free tiers and rounds the result:
+
+| Component | Low estimate | High estimate |
+|---|---:|---:|
+| Lambda duration | $0.04 | $3.82 |
+| Lambda requests | below $0.01 | $0.18 |
+| API Gateway HTTP API | $0.01 | $0.92 |
+| SQS requests | $0.01 | $1.10 |
+| **Event-path subtotal** | **about $0.06/month** | **about $6.02/month** |
+
+These figures show that the expected device-change events are not the main cost. Aurora capacity and storage, backups, network/NAT use, user-facing reads, full reconciliations, security services, support and observability are not included and may dominate the bill. They require a region, availability target, database size, API traffic and retention policy before they can be estimated. Current prices must be checked in the [AWS Lambda](https://aws.amazon.com/lambda/pricing/), [API Gateway](https://aws.amazon.com/api-gateway/pricing/), [SQS](https://aws.amazon.com/sqs/pricing/), [Aurora](https://aws.amazon.com/rds/aurora/pricing/) and [CloudWatch](https://aws.amazon.com/cloudwatch/pricing/) calculators before implementation.
+
+Logging cost should be controlled at the source: emit structured errors and state transitions, use metrics for counts, avoid an information log for every unchanged asset, sample high-volume diagnostics, keep short searchable retention and archive older logs to object storage. CloudWatch can deliver Lambda logs to S3 or Firehose. Grafana Cloud or Datadog can receive OpenTelemetry logs and metrics, but either may cost more depending on ingestion, indexing and retention; Datadog, for example, prices log ingestion and indexed events separately. Select a service from measured telemetry volume rather than assuming one vendor is cheaper.
+
+The design discussion referenced a previous Prime Video subscription and buy/rent workload serving millions of customers that cost its team about 7–8k per month. The currency, traffic profile and service breakdown were not supplied, so that figure is not used as this system's forecast. It is useful evidence that customer API traffic and observability can cost much more than the small device-event path calculated above.
 
 ## Data model
 
@@ -250,7 +285,11 @@ Absence is treated as removal only when processing a validated complete snapshot
 
 Delivery is at least once. HTTP 202 from the event-ingestion endpoint means the event was saved, not that inventory processing finished.
 
-The local Kafka broker has three partitions, seven-day retention, one broker and one replica. Its volume survives ordinary container restarts, but this is not a highly available cluster. SQL inbox/outbox cleanup, backups, monitoring and recovery drills remain production work.
+The local Kafka broker has three partitions, seven-day retention, one broker and one replica. Its volume survives ordinary container restarts. A production retention policy must say how long completed inbox rows, published outbox rows, rejected messages and Kafka records remain before deletion or archival. Retention bounds storage while leaving enough time to investigate and replay failures.
+
+Operational checks should measure pending outbox age/count, Kafka consumer lag, failed inventory jobs, rejection count, reconciliation duration and last successful sync. Alerts notify the operator when thresholds are exceeded. A recovery drill deliberately restores a backup or replays a failed message in a safe environment to prove that the written recovery steps work.
+
+Multiple Kafka brokers, database replicas and automatic failover are needed only when an agreed availability target requires them. These components provide high availability; metrics show whether they are healthy. The case study has no availability target and does not claim a highly available deployment.
 
 ## Provider and database boundaries
 
@@ -328,7 +367,7 @@ Browser checks confirmed:
 - Activity then reports an empty outbox.
 - Provider Lab creates, updates and removes provider state separately; Sync Now then reconciles the visible inventory.
 
-Multi-page pagination, mobile layout and full screen-reader testing remain unchecked. The pending asset-details navigation race is recorded in `docs/backlog.md`.
+Multi-page pagination, mobile layout and full screen-reader testing remain unchecked. One known UI race is recorded in `docs/backlog.md`: if asset details are still loading and the user moves to Activity, the late details response can return the UI to Assets. It was deferred at the user's request and does not affect synchronization data.
 
 Backend test command:
 
@@ -344,7 +383,7 @@ docker compose run --rm --no-deps --build frontend npm run build
 
 ## Production work
 
-Before connecting real customers, verify the real Jamf API/webhook contract, add provider authentication and tenant-scoped authorization, schedule periodic reconciliation, define SQL/Kafka retention, add metrics and alerts, benchmark peak workloads, and test database/Kafka backup and recovery.
+Before connecting real customers, verify the real Jamf API or webhook behavior, schedule periodic reconciliation, choose retention periods, benchmark peak workloads and prove backup restoration. The operational endpoints already identified above as local-only also need authentication and company-scoped authorization before a multi-customer deployment.
 
 The current result is a local case study: one mock provider, one company scope, separate provider and inventory databases, transactional outbox, Kafka transport, durable inventory inbox, queue worker and manual recovery controls.
 
