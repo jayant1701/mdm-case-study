@@ -134,6 +134,8 @@ export function AssetDetails({ asset, onClose }) {
 }
 
 export function Activity({
+  outbox,
+  onRetryDelivery,
   events,
   runs,
   busy,
@@ -163,12 +165,49 @@ export function Activity({
           Refresh activity
         </button>
       </div>
-      <h3>Events</h3>
+      <h3>Delivery to Kafka</h3>
+      <p>
+        Every notification is saved in the provider outbox first. Waiting means
+        Kafka delivery has not been acknowledged. Published means Kafka accepted
+        it; inventory processing may still be pending. Automatic retries run in
+        the background.
+      </p>
+      {outbox.unavailable ? (
+        <p role="status">Provider outbox unavailable: {outbox.unavailable}</p>
+      ) : (
+        <>
+          <p>{outbox.pending} notifications waiting for delivery.</p>
+          <button disabled={busy || !outbox.pending} onClick={onRetryDelivery}>
+            Retry pending delivery
+          </button>
+          {outbox.data.map((notification) => (
+            <article key={notification.event_id}>
+              <strong>
+                {notification.device_name}:{" "}
+                {notification.status === "pending"
+                  ? "Waiting for Kafka"
+                  : "Published to Kafka"}
+              </strong>
+              <p>
+                Delivery attempts: {notification.attempts} ·{" "}
+                {notification.created_at}
+              </p>
+              {notification.last_error && (
+                <p className="error">
+                  Last delivery error: {notification.last_error}
+                </p>
+              )}
+            </article>
+          ))}
+        </>
+      )}
+      <h3>Inventory processing</h3>
       {!events.length && <p>No notifications yet.</p>}
       {events.map((e) => (
         <article key={e.id}>
           <strong>
-            {e.provider_device_id}: {e.status}
+            {e.payload?.device?.asset?.device_name || e.provider_device_id}:{" "}
+            {e.status}
           </strong>
           <p>
             {e.type} · version {e.version} · generation {e.producer_generation}{" "}

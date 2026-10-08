@@ -19,6 +19,7 @@ function App() {
   const [employees, setEmployees] = useState([]);
   const [events, setEvents] = useState([]);
   const [runs, setRuns] = useState([]);
+  const [outbox, setOutbox] = useState({ data: [], pending: 0 });
   const [page, setPage] = useState(1);
   const [lastPage, setLastPage] = useState(1);
   const [detail, setDetail] = useState(null);
@@ -27,11 +28,15 @@ function App() {
   const [notice, setNotice] = useState("");
 
   async function refresh(p = page) {
-    const [a, e, v, r] = await Promise.all([
+    const [a, e, v, r, o] = await Promise.all([
       request("/assets?page=" + p),
       request("/employees"),
       request("/events"),
       request("/sync-runs"),
+      request("/provider-outbox").catch((error) => ({
+        data: [],
+        unavailable: error.message,
+      })),
     ]);
     if (p > a.last_page) {
       setPage(a.last_page);
@@ -42,6 +47,7 @@ function App() {
     setEmployees(e.data);
     setEvents(v.data);
     setRuns(r.data);
+    setOutbox(o);
   }
   useEffect(() => {
     refresh().catch((e) => setError(e.message));
@@ -175,6 +181,17 @@ function App() {
       )}
       {tab === "activity" && (
         <Activity
+          outbox={outbox}
+          onRetryDelivery={() =>
+            action(async () => {
+              const result = await request("/provider-outbox/retry", {
+                method: "POST",
+              });
+              setNotice(
+                `${result.published} notifications published to Kafka; ${result.pending} still waiting. Inventory processing is separate. Automatic delivery retries remain enabled.`,
+              );
+            })
+          }
           events={events}
           runs={runs}
           busy={busy}
