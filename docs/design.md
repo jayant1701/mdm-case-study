@@ -46,7 +46,7 @@ A transaction and a lock solve different problems. The transaction keeps device/
 
 Kafka transactions do not include MySQL writes. Publishing before SQL commit can expose an event for a rolled-back change. The provider therefore always writes the outbox before publication, rather than using SQL only as a broker-failure fallback.
 
-The local broker has a persistent volume, one replica and seven-day retention. It tolerates process restarts but is not a highly available cluster. A production retention policy must bound Kafka records and completed SQL inbox/outbox rows. Monitoring should report the oldest pending outbox row, Kafka consumer lag, failed jobs and last successful reconciliation. A restore/replay drill proves the documented recovery path works. Replicas and automatic failover are needed only when an agreed availability target requires them; monitoring observes availability but does not provide it.
+The local broker has a persistent volume, one replica and seven-day retention. It tolerates ordinary process restarts. This is the case-study topology, not a capacity or availability claim.
 
 ## Provider extensibility and scaling
 
@@ -54,7 +54,7 @@ DeviceProvider maps the fixture. RemoteProviderGateway and TargetedDeviceProvide
 
 Only Jamf is supported at runtime. Multi-provider selection and company-scoped identities are not implemented. In a multi-customer product, `company_id` must scope emails, serial numbers, provider IDs, events and queries so one company cannot read or collide with another company's records.
 
-The current estimate does not justify more consumer partitions or database shards. If measured traffic later shows one company delaying others, schedule outbox work fairly by company and use company/device event keys. Company-based database shards are a later response to measured throughput, storage or provider-throttling limits. Kafka buffers backlog; it does not remove inventory database limits. The README contains the planning estimates and an unimplemented serverless alternative.
+Kafka can scale, but the current estimate does not justify more consumer partitions or database shards. Scale the measured bottleneck: add a composite outbox index if pending-row selection is slow, add partitions and consumers if processing lag grows, and schedule work fairly by company if provider throttling lets one company delay others. Company-based database shards are a later response to measured throughput or storage limits. Kafka buffers backlog; it does not remove inventory database limits. The README contains the planning estimates and an unimplemented serverless alternative.
 
 ## Delivery activity
 

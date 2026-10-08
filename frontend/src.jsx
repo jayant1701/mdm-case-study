@@ -93,9 +93,9 @@ function App() {
     });
   }
   async function showDetails(id) {
+    setTab("assets");
     await action(async () => {
       setDetail(await request("/assets/" + id));
-      setTab("assets");
     });
   }
   async function showEmployeeDetails(id) {
