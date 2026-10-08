@@ -130,7 +130,9 @@ function App() {
           <h1>Device inventory</h1>
           <p>
             Sync Now reconciles the inventory with the current provider state.
-            Mock-data controls are available under Testing.
+            Testing contains the mock-provider controls. Activity shows
+            notifications waiting for Kafka and provides processing and CSV
+            export controls.
           </p>
         </div>
         <button disabled={busy} onClick={sync}>
