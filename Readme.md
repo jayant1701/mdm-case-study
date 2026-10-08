@@ -23,6 +23,7 @@
 4. [Run the application](#4-run-the-application)
 5. [Application behavior and mock data](#5-application-behavior-and-mock-data)
    - [User interface](#user-interface)
+   - [Demo screenshots](#demo-screenshots)
    - [Purpose of the JSON fixture](#purpose-of-the-json-fixture)
    - [Source-field mapping](#source-field-mapping)
 6. [Implemented design](#6-implemented-design)
@@ -357,6 +358,28 @@ docker compose down -v
 - **Testing** resets the demo, creates a deterministic Kafka-delivery failure, changes provider devices through Provider Lab, lists locally deleted assets and shows technical history.
 
 Provider Lab writes provider state and a durable outbox notification. The normal Kafka path can update inventory asynchronously. **Sync Now** forces an immediate outbox retry, then fetches the complete provider snapshot and reconciles inventory, including recovery from a missed event.
+
+### Demo screenshots
+
+These screenshots use the supplied fixture and the local Docker Compose environment.
+
+#### Inventory and details
+
+![Assets overview](docs/screenshots/assets-overview.png)
+
+Asset and employee details open directly below the selected table row.
+
+![Asset details](docs/screenshots/asset-details.png)
+
+![Employee details](docs/screenshots/employee-details.png)
+
+#### Recovery and provider testing
+
+Activity exposes persisted provider notifications when Kafka delivery fails. Testing provides controlled provider changes and demo reset actions.
+
+![Kafka recovery activity](docs/screenshots/activity-recovery.png)
+
+![Testing tools](docs/screenshots/testing-tools.png)
 
 ### Purpose of the JSON fixture
 
