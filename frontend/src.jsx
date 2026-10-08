@@ -25,6 +25,7 @@ function App() {
     notifications: [],
     truncated: false,
   });
+  const [inventoryFailures, setInventoryFailures] = useState([]);
   const [page, setPage] = useState(1);
   const [lastPage, setLastPage] = useState(1);
   const [detail, setDetail] = useState(null);
@@ -34,7 +35,7 @@ function App() {
   const [notice, setNotice] = useState("");
 
   async function refresh(p = page) {
-    const [a, e, r, d, o] = await Promise.all([
+    const [a, e, r, d, o, f] = await Promise.all([
       request("/assets?page=" + p),
       request("/employees"),
       request("/sync-runs"),
@@ -42,6 +43,7 @@ function App() {
       request("/provider-outbox").catch((error) => ({
         unavailable: error.message,
       })),
+      request("/event-failures"),
     ]);
     if (p > a.last_page) {
       setPage(a.last_page);
@@ -53,6 +55,7 @@ function App() {
     setRuns(r.data);
     setDeletedAssets(d.data);
     setOutbox(o);
+    setInventoryFailures(f.data);
   }
   useEffect(() => {
     refresh().catch((e) => setError(e.message));
@@ -135,8 +138,8 @@ function App() {
           <p>
             Sync Now reconciles the inventory with the current provider state.
             Testing contains the mock-provider controls. Activity shows
-            notifications waiting for Kafka and provides processing and CSV
-            export controls.
+            notifications waiting for Kafka and inventory changes that could not
+            be processed.
           </p>
         </div>
         <button disabled={busy} onClick={sync}>
@@ -208,6 +211,7 @@ function App() {
       {tab === "activity" && (
         <Activity
           outbox={outbox}
+          inventoryFailures={inventoryFailures}
           onRetryDelivery={() =>
             action(async () => {
               const result = await request("/provider-outbox/retry", {
@@ -215,6 +219,14 @@ function App() {
               });
               setNotice(
                 `${result.published} notifications published to Kafka; ${result.pending} still waiting. Inventory processing is separate. Automatic delivery retries remain enabled.`,
+              );
+            })
+          }
+          onRetryInventory={(id) =>
+            action(async () => {
+              await request(`/events/${id}/retry`, { method: "POST" });
+              setNotice(
+                "Inventory processing has been queued for another attempt.",
               );
             })
           }

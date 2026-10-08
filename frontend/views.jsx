@@ -258,7 +258,13 @@ export function AssetDetails({ asset, onClose }) {
   );
 }
 
-export function Activity({ outbox, onRetryDelivery, busy }) {
+export function Activity({
+  outbox,
+  inventoryFailures,
+  onRetryDelivery,
+  onRetryInventory,
+  busy,
+}) {
   const notifications = outbox.notifications || [];
 
   return (
@@ -339,6 +345,77 @@ export function Activity({ outbox, onRetryDelivery, busy }) {
               notifications. The CSV contains the displayed rows.
             </p>
           )}
+        </section>
+      )}
+
+      <h2>Inventory processing</h2>
+      <p>
+        These notifications reached the inventory service but could not be
+        applied after automatic retries. The database retains the technical
+        details for debugging.
+      </p>
+      {inventoryFailures.length === 0 ? (
+        <p className="success" role="status">
+          No inventory changes need attention.
+        </p>
+      ) : (
+        <section className="pending">
+          <strong>
+            {inventoryFailures.length} inventory change
+            {inventoryFailures.length === 1 ? "" : "s"} need attention.
+          </strong>
+          <div className="table inventory-failures">
+            <table>
+              <thead>
+                <tr>
+                  <th>Affected device</th>
+                  <th>Affected employee</th>
+                  <th>Change</th>
+                  <th>Attempts</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {inventoryFailures.map((failure) => (
+                  <tr key={failure.id}>
+                    <td>
+                      <strong>{failure.device_name || "Unknown device"}</strong>
+                      <br />
+                      <code>{failure.serial_code || "Unknown serial"}</code>
+                    </td>
+                    <td>
+                      <strong>
+                        {failure.employee_name ||
+                          (failure.employee_email
+                            ? "Unnamed employee"
+                            : "Unassigned")}
+                      </strong>
+                      {failure.employee_email && (
+                        <>
+                          <br />
+                          {failure.employee_email}
+                        </>
+                      )}
+                    </td>
+                    <td>
+                      {(failure.type || "unknown")
+                        .replace("device.", "")
+                        .replaceAll("_", " ")}
+                    </td>
+                    <td>{failure.attempts}</td>
+                    <td>
+                      <button
+                        disabled={busy}
+                        onClick={() => onRetryInventory(failure.id)}
+                      >
+                        Retry
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </section>
       )}
     </>

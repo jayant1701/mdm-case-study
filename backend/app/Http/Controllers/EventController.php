@@ -27,6 +27,26 @@ final class EventController extends Controller
         return ['data' => $this->events->recent(50)];
     }
 
+    public function failures(): array
+    {
+        return ['data' => $this->events->failed(50)->map(function ($event) {
+            $device = $event->payload['device'] ?? [];
+            $employee = $device['employee'] ?? [];
+
+            return [
+                'id' => $event->id,
+                'type' => $event->type,
+                'provider_device_id' => $event->provider_device_id,
+                'device_name' => $device['asset']['device_name'] ?? null,
+                'serial_code' => $device['serial_code'] ?? null,
+                'employee_name' => $employee['name'] ?? null,
+                'employee_email' => $device['email'] ?? null,
+                'attempts' => $event->attempts,
+                'failed_at' => $event->updated_at,
+            ];
+        })->values()];
+    }
+
     public function store(Request $request, EventReceiver $receiver)
     {
         $payload = $request->all();

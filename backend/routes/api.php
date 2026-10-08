@@ -24,6 +24,7 @@ Route::get('/deleted-assets', [InventoryController::class, 'deletedAssets']);
 Route::post('/restorations', [InventoryController::class, 'restore']);
 
 Route::get('/events', [EventController::class, 'index']);
+Route::get('/event-failures', [EventController::class, 'failures']);
 Route::get('/provider-outbox', [EventController::class, 'providerOutbox']);
 Route::post('/provider-outbox/retry', [EventController::class, 'retryProviderOutbox']);
 Route::post('/events/jamf', [EventController::class, 'store']);

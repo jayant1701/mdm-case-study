@@ -52,7 +52,7 @@ final class EventProcessor
         } catch (\Throwable $error) {
             if ($processed) {
                 $this->transactions->withProviderLock('jamf', function () use ($inboxId, $error) {
-                    if ($this->events->markFailedAttempt($inboxId, $error->getMessage())) {
+                    if ($this->events->markRetrying($inboxId, $error->getMessage())) {
                         $this->runs->recordFailedAttempt('jamf', 'event', $error->getMessage());
                     }
                 });

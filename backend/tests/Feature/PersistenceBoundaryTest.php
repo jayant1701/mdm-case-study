@@ -51,7 +51,7 @@ final class PersistenceBoundaryTest extends InventoryTestCase
         $substitute->shouldReceive('require')->once()->with($inbox->id)->andReturnUsing(fn ($id) => $actual->require($id));
         $substitute->shouldReceive('markProcessing')->once()->with($inbox->id)->andReturnUsing(fn ($id) => $actual->markProcessing($id));
         $substitute->shouldReceive('markSucceeded')->once()->with($inbox->id, 'applied')->andThrow(new RuntimeException('Simulated inbox acknowledgment failure.'));
-        $substitute->shouldReceive('markFailedAttempt')->once()->with($inbox->id, 'Simulated inbox acknowledgment failure.')->andReturnUsing(fn ($id, $error) => $actual->markFailedAttempt($id, $error));
+        $substitute->shouldReceive('markRetrying')->once()->with($inbox->id, 'Simulated inbox acknowledgment failure.')->andReturnUsing(fn ($id, $error) => $actual->markRetrying($id, $error));
         $this->app->instance(EventInboxRepository::class, $substitute);
         try {
             (new ProcessDeviceEvent($inbox->id))->handle(app(EventProcessor::class));
@@ -60,11 +60,13 @@ final class PersistenceBoundaryTest extends InventoryTestCase
             $this->assertSame('Simulated inbox acknowledgment failure.', $error->getMessage());
         }
         $this->assertSame(16.0, Asset::where('provider_device_id', '101')->first()->specifications->ram_gb);
-        $this->assertSame('failed', EventInbox::find($inbox->id)->status);
+        $this->assertSame('retrying', EventInbox::find($inbox->id)->status);
         $this->assertSame(1, EventInbox::find($inbox->id)->attempts);
         $this->assertDatabaseHas('sync_runs', ['mode' => 'event', 'status' => 'failed']);
         $this->assertDatabaseHas('device_event_states', ['provider_device_id' => '101', 'version' => 1]);
         $this->app->instance(EventInboxRepository::class, $actual);
+        (new ProcessDeviceEvent($inbox->id))->failed(new RuntimeException('Simulated inbox acknowledgment failure.'));
+        $this->assertSame('failed', EventInbox::find($inbox->id)->status);
         file_put_contents($this->fixture, 'broken');
         app(EventReceiver::class)->retry($inbox->id);
         (new ProcessDeviceEvent($inbox->id))->handle(app(EventProcessor::class));

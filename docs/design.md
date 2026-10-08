@@ -58,7 +58,9 @@ Company-based worker partitions and database shards can spread customer traffic.
 
 ## Delivery activity
 
-The inventory Activity page proxies provider-owned outbox information over HTTP. The response contains the total pending count and at most 100 summary rows: device name, serial, event type, provider ID, attempts, error and retry timestamps. It does not expose complete event payloads. Activity lists those rows, exports the displayed rows as CSV and offers manual processing when needed. If more than 100 are pending, the UI identifies that the list and CSV are truncated.
+The inventory Activity page shows two boundaries. Provider delivery uses a proxied outbox response containing the pending count and at most 100 summary rows: device name, serial, event type, provider ID, attempts, error and retry timestamps. Activity lists those rows, exports the displayed rows as CSV and offers manual processing when needed. If more than 100 are pending, the UI identifies that the list and CSV are truncated.
+
+Inventory processing lists only inbox records that exhausted all three automatic queue attempts. Each row identifies the affected device and employee and offers a manual retry. The UI endpoint omits complete event payloads and exception details; those remain in `event_inboxes` and `failed_jobs` for debugging. An unsuccessful attempt is marked `retrying`, while the queue still owns its retry, and becomes `failed` only through the job's terminal failure callback.
 
 Testing contains reset, deterministic delivery-failure, local-deletion listing and technical processing history. The deterministic control writes the durable state of a failed publication; it does not stop Kafka. Manual processing drains at most ten pending messages using the same publisher as automatic retries, while also bypassing their retry delay; published rows are excluded. Provider database credentials never reach the inventory service. Demo reset/failure routes are limited to local/testing environments. Outbox status and retry routes are always registered in this case study and require access control before production use.
 

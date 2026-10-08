@@ -44,6 +44,11 @@ final class EloquentEventInboxRepository implements EventInboxRepository
         return EventInbox::latest('id')->limit($limit)->get();
     }
 
+    public function failed(int $limit): Collection
+    {
+        return EventInbox::where('status', 'failed')->latest('updated_at')->limit($limit)->get();
+    }
+
     public function markProcessing(int $id): void
     {
         $record = $this->require($id);
@@ -55,9 +60,16 @@ final class EloquentEventInboxRepository implements EventInboxRepository
         $this->require($id)->update(['status' => 'succeeded', 'outcome' => $outcome, 'processed_at' => now(), 'last_error' => null]);
     }
 
-    public function markFailedAttempt(int $id, string $error): bool
+    public function markRetrying(int $id, string $error): bool
     {
-        return EventInbox::whereKey($id)->where('status', '!=', 'succeeded')->increment('attempts', 1, ['status' => 'failed', 'last_error' => $error]) > 0;
+        // markProcessing runs inside the transaction that failed, so its attempt
+        // increment is rolled back. Record the failed attempt in this recovery transaction.
+        return EventInbox::whereKey($id)->where('status', '!=', 'succeeded')->increment('attempts', 1, ['status' => 'retrying', 'last_error' => $error]) > 0;
+    }
+
+    public function markFailed(int $id, string $error): void
+    {
+        EventInbox::whereKey($id)->where('status', '!=', 'succeeded')->update(['status' => 'failed', 'last_error' => $error]);
     }
 
     public function markPending(int $id): EventInbox

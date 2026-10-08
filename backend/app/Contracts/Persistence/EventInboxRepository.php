@@ -21,12 +21,16 @@ interface EventInboxRepository
 
     public function recent(int $limit): Collection;
 
+    public function failed(int $limit): Collection;
+
     public function markProcessing(int $id): void;
 
     public function markSucceeded(int $id, string $outcome = 'applied'): void;
 
     /** Returns false if another worker already completed this notification. */
-    public function markFailedAttempt(int $id, string $error): bool;
+    public function markRetrying(int $id, string $error): bool;
+
+    public function markFailed(int $id, string $error): void;
 
     public function markPending(int $id): EventInbox;
 }

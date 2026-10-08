@@ -41,7 +41,7 @@ The UI has four areas:
 
 - **Assets** lists devices. Details open directly below the selected row.
 - **Employees** lists active employees and their assigned assets. Selecting an employee opens their contact, status and complete assigned-device details directly below the row.
-- **Activity** shows whether provider notifications are waiting. If any are pending, it lists their device name, serial, change type and retry state, offers a manual processing action, and can export the displayed rows as CSV.
+- **Activity** shows provider notifications waiting for Kafka and permanently failed inventory changes. Delivery failures can be processed manually or exported as CSV. Inventory failures identify the affected device and employee and can be retried; complete payloads and exceptions remain in the database for debugging.
 - **Testing** can reset the demo, create one deterministic delivery-failure state, change provider devices through Provider Lab, list locally deleted devices and show technical sync/event history. Provider Lab changes the provider only; use Sync Now to fetch those changes into the visible inventory.
 
 `docker compose down` stops the application. `docker compose down -v` also deletes both MySQL volumes and the Kafka volume.
@@ -235,7 +235,8 @@ Absence is treated as removal only when processing a validated complete snapshot
 | Consumer stops before offset commit | Kafka redelivers; the inbox deduplicates it |
 | Queue dispatch fails after receipt | Pending inbox row is recovered and dispatched again |
 | Invalid/conflicting Kafka payload | Record and error are saved in `rejected_notifications` before acknowledgement |
-| Worker fails | Inventory writes and event completion roll back together |
+| Worker attempt fails | Inventory writes and event completion roll back together; the inbox is marked `retrying` |
+| Worker exhausts three attempts | The inbox is marked `failed`, retained for debugging and shown in Activity with a manual retry action |
 | Older event arrives later | Device version and provider generation prevent regression |
 | Full reconciliation races with an old event | Reconciliation records the current provider version, so the old event is ignored |
 
@@ -289,6 +290,7 @@ Inventory endpoints are on port 8000:
 | GET | `/api/sync-runs` | Recent sync outcomes and counters |
 | POST | `/api/events/jamf` | HTTP/test ingestion into the durable inbox; Kafka runtime calls the same receiver directly |
 | GET | `/api/events` | Technical event-processing history |
+| GET | `/api/event-failures` | Actionable inventory failures summarized by affected device and employee |
 | POST | `/api/events/{id}/retry` | Retry a failed inventory event |
 | GET | `/api/provider-outbox` | Proxy pending count and notification summaries for Activity/CSV export |
 | POST | `/api/provider-outbox/retry` | Proxy manual outbox processing for Activity |

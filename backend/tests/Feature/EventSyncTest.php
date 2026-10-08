@@ -142,7 +142,16 @@ class EventSyncTest extends InventoryTestCase
         } catch (ConflictHttpException $error) {
             $this->assertStringContainsString('Conflicting payload', $error->getMessage());
         }
+        $this->assertSame('retrying', $inbox->fresh()->status);
+        (new ProcessDeviceEvent($inbox->id))->failed(new ConflictHttpException('Conflicting payload at an applied device version.'));
         $this->assertSame('failed', $inbox->fresh()->status);
+        $failure = $this->getJson('/api/event-failures')->assertOk()->json('data.0');
+        $this->assertSame('Alex’s MacBook Pro', $failure['device_name']);
+        $this->assertSame('C02DL0XYZQ6N', $failure['serial_code']);
+        $this->assertSame('Alex Smith', $failure['employee_name']);
+        $this->assertSame('alex.smith@company.test', $failure['employee_email']);
+        $this->assertArrayNotHasKey('payload', $failure);
+        $this->assertArrayNotHasKey('last_error', $failure);
         $this->assertSame(16.0, Asset::where('provider_device_id', '101')->first()->specifications->ram_gb);
     }
 
@@ -244,6 +253,6 @@ class EventSyncTest extends InventoryTestCase
             $this->assertStringContainsString('serial', $error->getMessage());
         }
         $this->assertDatabaseCount('assets', 7);
-        $this->assertSame('failed', $event->fresh()->status);
+        $this->assertSame('retrying', $event->fresh()->status);
     }
 }
