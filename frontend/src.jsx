@@ -71,7 +71,7 @@ function App() {
   async function remove(kind, id) {
     const message =
       kind === "employees"
-        ? "Delete this employee locally? Their assets will remain unassigned until sync."
+        ? "Delete this employee locally? Their assets retain a Deleted user reference and email until sync restores the employee."
         : "Delete this asset locally? A later sync can restore it.";
     if (!window.confirm(message)) return;
     await action(async () => {

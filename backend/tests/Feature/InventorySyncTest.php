@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Asset;
 use App\Models\Employee;
 use App\Models\SyncRun;
+use App\Services\DeviceEventSimulator;
 use App\Services\JamfSyncService;
 use Tests\InventoryTestCase;
 
@@ -65,7 +66,8 @@ class InventorySyncTest extends InventoryTestCase
         $this->assertDatabaseHas('restore_tasks', ['status' => 'restored']);
         $employee = Employee::where('email', $email)->first();
         $this->deleteJson('/api/employees/'.$employee->id)->assertNoContent();
-        $this->assertDatabaseHas('assets', ['employee_id' => null]);
+        $this->assertDatabaseHas('assets', ['employee_id' => $employee->id]);
+        $this->assertSoftDeleted('employees', ['id' => $employee->id]);
         $this->sync();
         $this->assertDatabaseCount('employees', 6);
         $this->assertSame(0, Asset::whereNull('employee_id')->count());
@@ -82,6 +84,7 @@ class InventorySyncTest extends InventoryTestCase
         $this->deleteJson('/api/assets/'.$a->id);
         $this->source['results'][0]['userAndLocation']['email'] = null;
         $this->write();
+        app(DeviceEventSimulator::class)->simulate();
         app(JamfSyncService::class)->restore();
         $this->assertDatabaseHas('restore_tasks', ['status' => 'upstream_unassigned']);
         $this->assertDatabaseCount('assets', 6);
@@ -90,6 +93,7 @@ class InventorySyncTest extends InventoryTestCase
         array_splice($this->source['results'], 1, 1);
         $this->source['totalCount'] = 6;
         $this->write();
+        app(DeviceEventSimulator::class)->simulate();
         app(JamfSyncService::class)->restore();
         $this->assertDatabaseHas('restore_tasks', ['serial_code' => $b->serial_code, 'status' => 'upstream_missing']);
     }

@@ -25,7 +25,7 @@ export function AssetList({ assets, busy, onDetails, onDelete }) {
                 </td>
                 <td>{a.device_model?.model_name || "Unknown"}</td>
                 <td>{a.specifications?.ram_gb ?? "—"} GiB</td>
-                <td>{a.employee?.email || "Employee deleted locally"}</td>
+                <td>{a.employee?.deleted_at ? `Deleted user (${a.employee.email})` : a.employee?.email || "Unassigned"}</td>
                 <td>
                   <button disabled={busy} onClick={() => onDetails(a.id)}>
                     Details
@@ -101,6 +101,7 @@ export function AssetDetails({ asset, onClose }) {
   const fields = {
     ...asset.specifications,
     serial_code: asset.serial_code,
+    employee: asset.employee?.deleted_at ? `Deleted user (${asset.employee.email})` : asset.employee?.email || "Unassigned",
     provider: asset.provider,
     provider_device_id: asset.provider_device_id,
     purchase_date: asset.purchase_date,

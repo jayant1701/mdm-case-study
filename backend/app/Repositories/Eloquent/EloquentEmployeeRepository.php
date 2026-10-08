@@ -10,8 +10,9 @@ final class EloquentEmployeeRepository implements EmployeeRepository
 {
     public function upsertByEmail(string $email, array $presentFields): Employee
     {
-        $employee = Employee::firstOrNew(['email' => $email]);
+        $employee = Employee::withTrashed()->firstOrNew(['email' => $email]);
         $employee->fill($presentFields);
+        $employee->deleted_at = null;
         $employee->save();
 
         return $employee;
@@ -29,6 +30,9 @@ final class EloquentEmployeeRepository implements EmployeeRepository
 
     public function deleteLocal(int $id): void
     {
-        Employee::findOrFail($id)->delete();
+        // The caller holds a transaction and provider lock.
+        // Retain only identity so existing asset assignments remain attributable.
+        $employee = Employee::findOrFail($id);
+        $employee->fill(['name' => null, 'phone' => null, 'deleted_at' => now()])->save();
     }
 }
