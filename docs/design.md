@@ -12,7 +12,7 @@ The inventory runs database/migrations. It owns assets, employees, specification
 
 Provider mutations acquire a provider-generation row lock and start a database transaction. The transaction validates identities, changes device state, increments device versions and generation, and inserts outgoing events. Any failed write rolls back all these changes.
 
-The request succeeds when that transaction commits. Kafka delivery is asynchronous. The outbox publisher reads pending rows and sends complete device events keyed by jamf|provider_device_id. It waits for broker acknowledgment before marking each row published. Errors leave the row pending for retry.
+The request succeeds when that transaction commits. Kafka delivery is asynchronous. The outbox publisher reads due pending rows and sends complete device events keyed by jamf|provider_device_id. It waits for broker acknowledgment before marking each row published. Errors leave the row pending with a scheduled retry; manual recovery may process deferred rows immediately.
 
 Kafka uses three partitions. Device keys preserve per-device ordering within a partition; they do not establish global order. Device versions and provider generations protect processing and shared employee/model updates.
 
@@ -30,9 +30,9 @@ RemoteProviderGateway is the HTTP adapter boundary. HttpMockProviderAdapter vali
 
 Sync Now requests the complete current provider snapshot. Recovery applies its device envelopes and checkpoints together. A snapshot older than already applied events is rejected; an equal device version with conflicting meaningful state is also rejected.
 
-Import source JSON retains the assignment's direct file-read requirement. The backend validates and reads the file, submits it to the provider import API, then applies the returned snapshot. Provider and inventory commits are separate. If only provider import succeeds, retry reconciliation; the saved provider events remain available.
+The direct JSON import path remains available for assignment-level tests. The normal UI Sync Now path reads only the provider HTTP snapshot. Reset demo reloads the fixture into the provider, clears local inventory state and leaves inventory empty until Sync Now is selected. Provider generations and device versions remain monotonic during reset so a delayed pre-reset Kafka event is older than the new provider snapshot.
 
-Local asset deletion saves provider identity in RestoreTask and removes only inventory data. Restoration retrieves that device over HTTP and applies its source version. Removed or unassigned devices are not recreated. Older Kafka messages cannot override recovered state.
+Local asset deletion saves provider identity and device name in RestoreTask and removes only inventory data. Testing lists pending local deletions without exposing a restore action. Full reconciliation can recreate an assigned device that still exists upstream. The targeted restoration service remains an internal recovery path and validates the provider identity/version.
 
 Employee deletion retains internal ID/email/deletion time, clears name/phone and preserves asset links. Relevant source events or reconciliation may reactivate that employee.
 
@@ -54,4 +54,4 @@ Company-based worker partitions and database shards can spread customer traffic.
 
 ## Delivery activity
 
-The inventory Activity page proxies only the provider-owned pending outbox count over HTTP. It reports empty or waiting state and offers manual processing when needed. The Testing page contains JSON controls and technical inventory processing history. Manual processing drains at most ten pending messages using the same publisher as automatic retries; published rows are excluded. Provider database credentials never reach the inventory service. The controls are intended for local development; production needs authorization.
+The inventory Activity page proxies only the provider-owned pending outbox count over HTTP. It reports empty or waiting state and offers manual processing when needed. Testing contains reset, deterministic delivery-failure, local-deletion listing and technical processing history. Manual processing drains at most ten pending messages using the same publisher as automatic retries, while also bypassing their retry delay; published rows are excluded. Provider database credentials never reach the inventory service. The controls are registered only in local/testing environments.

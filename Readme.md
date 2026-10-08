@@ -21,7 +21,7 @@ docker compose up --build
 - Mock provider API: http://localhost:8002/api/provider/snapshot
 - Startup loads the supplied JSON into the provider store once. The worker imports seven assigned assets and six employees.
 - **Sync Now** reads the current provider store and reconciles the local inventory.
-- **Testing** contains mock JSON import/scan controls, local restoration and technical processing history.
+- **Testing** can reset the demo from the supplied JSON, create one deterministic Kafka delivery failure, list locally deleted devices and show technical processing history.
 - **Activity** shows only whether the provider outbox is empty and provides a manual process button when notifications are waiting.
 
 Docker runs React, the inventory API, inventory MySQL, the provider API, provider MySQL, an outbox publisher, Kafka, a Kafka consumer and an inventory job worker. Separate named volumes retain both databases and Kafka records. `docker compose down` stops the application; adding `-v` deletes those volumes.
@@ -216,11 +216,14 @@ Provider endpoints change the simulated source. Inventory endpoints manage local
 | GET | /api/provider/snapshot | Provider: complete versioned state, including tombstones |
 | POST | /api/provider/import | Provider: accept a complete raw JSON response |
 | POST | /api/provider/scan | Provider: scan mounted JSON and persist changes/events |
+| POST | /api/provider/testing/reset | Local demo: reload the JSON fixture without publishing reset events |
+| POST | /api/provider/testing/kafka-failure | Local demo: persist one deferred notification with a simulated broker error |
 | GET | /api/assets | List local assets with pagination |
 | GET | /api/assets/{id} | Get asset details |
 | GET | /api/employees | List active employees and their assets |
 | DELETE | /api/assets/{id} | Delete a local asset and retain restoration details |
 | DELETE | /api/employees/{id} | Mark an employee deleted and retain linked assets |
+| GET | /api/deleted-assets | List devices currently deleted only from local inventory |
 | POST | /api/sync/provider | Reconcile inventory with the current provider store |
 | POST | /api/sync | Import the supplied JSON into provider and inventory stores |
 | POST | /api/simulator/jamf | Scan JSON differences and queue events |
@@ -229,6 +232,8 @@ Provider endpoints change the simulated source. Inventory endpoints manage local
 | POST | /api/events/jamf | Save a device event for processing |
 | GET | /api/events | Get event processing results |
 | POST | /api/events/{id}/retry | Retry a failed event |
+| POST | /api/demo/reset | Local demo: reset provider state and clear inventory state |
+| POST | /api/demo/kafka-failure | Local demo: create one recoverable outbox delivery failure |
 
 Inventory endpoints use port 8000. Provider endpoints use port 8002 and are absent from the inventory API. Restoration and reconciliation use the HTTP adapter, not direct provider database access. The local UI does not provide manual asset creation or editing.
 
@@ -250,15 +255,14 @@ curl -X PATCH -H "Accept: application/json" -H "Content-Type: application/json" 
 
 The worker uses the event payload. It does not read the JSON file or fetch the device again.
 
-### Delete and restore a local asset
+### Delete a local asset
 
 1. Save its provider ID and serial in RestoreTask, then delete the local asset and attributes.
 2. Keep the employee and provider device.
-3. Run restoration and look up only that provider ID.
-4. Restore it if it still exists and is assigned.
-5. Record the current source version so older queued updates cannot overwrite the result.
+3. Show the retained identity under Testing as a locally deleted device.
+4. Do not offer a restore action in the UI.
 
-Removed, unassigned or unknown provider devices are not restored. An unchanged file scan does not restore local deletions. Restoration is explicit; full reconciliation also restores eligible assigned devices.
+Sync Now performs complete reconciliation, so an assigned device that still exists at the provider can reappear. The targeted restoration service remains covered as a recovery design, but is not exposed as a Testing-page action.
 
 ### Delete an employee
 
@@ -272,13 +276,13 @@ This uses soft deletion to preserve the identity and asset links we chose in the
 
 Create a removal or unassignment event. Processing removes the local asset because this application imports assigned devices. The employee is not deleted.
 
-### Import or scan the JSON
+### Provider JSON fixture
 
 The supplied JSON represents provider output. If device records disagree on shared employee/model descriptions, sorted provider-ID precedence supplies a deterministic value and the mapper records a warning. This is an explicit conflict policy, not a Jamf guarantee.
 
-- **Import source JSON** makes the backend read the full file directly, sends it to the provider import API, then applies returned provider versions to inventory.
-- **Scan source and queue changes** asks the provider to scan its mounted file and persist meaningful differences in its outbox.
-- Editing the file alone does not update provider GET responses; import or scan first.
+- **Reset demo** reloads the supplied JSON into the provider, clears local inventory state and then asks the reviewer to use Sync Now.
+- Sync Now fetches the provider snapshot over the HTTP adapter; the UI never reads the JSON directly.
+- Import and scan endpoints remain available for technical tests of the assignment's direct-file path, but the UI no longer exposes a confusing scan button.
 - Queued events keep their saved payload even if the file later changes.
 
 The two databases cannot commit a full import together. If provider import succeeds but inventory reconciliation fails, retry reconciliation against current provider state. Both event processing and recovery use provider-owned versions, so older queued events cannot reverse the recovered state.
@@ -287,13 +291,13 @@ Removing assets because they are missing from a response requires a complete sna
 
 ## Verification
 
-Passed: 56 backend tests with 340 assertions, and the React production build.
+Passed: 60 backend tests with 372 assertions, and the React production build.
 
 Tests cover provider changes, event persistence, retries, duplicate/stale messages, timestamp suppression, partial fields, restoration and employee deletion. Docker/MySQL checks also verified provider CRUD, queued processing, restoration with older pending events and employee reactivation.
 
 Kafka integration checks verified initial import, provider create/update/remove, a broker outage leaving a pending outbox record, recovery after restart, timestamp-only suppression, targeted restoration while older events waited, and successful JSON import/current-provider reconciliation. MySQL's JSON numeric round-trip is normalized so 16 and 16.0 do not create false conflicts.
 
-A UX agent tested Assets, Details, Employees, Activity, both sync actions, asset deletion/restoration and employee deletion/reactivation through the browser. No browser console errors were observed. Multi-page pagination, mobile and screen-reader testing remain unchecked.
+Browser checks verified the seven-device reset/sync baseline, details directly below the selected asset, a simulated Kafka failure remaining pending across publisher cycles, manual publication of that one notification, and an empty outbox afterward. Multi-page pagination, mobile and full screen-reader testing remain unchecked.
 
 ```sh
 cd backend
@@ -319,10 +323,10 @@ The current implementation is a local case study with separate provider/inventor
 
 Activity reports whether the provider outbox is empty. A non-empty outbox means one or more notifications have not received Kafka acknowledgment. Detailed event and synchronization results are kept under Testing.
 
-Process pending notifications immediately attempts up to ten pending outbox notifications through the provider API. Published notifications are not resent. Automatic delivery retries continue in the background. All events use the outbox, including when Kafka is healthy; it is not only an outage fallback. If the provider cannot be reached, inventory remains usable and Activity reports the unavailable outbox.
+Process pending notifications immediately attempts up to ten pending outbox notifications through the provider API, including rows waiting for their scheduled retry. Published notifications are not resent. Automatic delivery retries use `next_attempt_at` to avoid a tight failure loop. All events use the outbox, including when Kafka is healthy; it is not only an outage fallback. If the provider cannot be reached, inventory remains usable and Activity reports the unavailable outbox.
 
 Provider endpoints: GET /api/provider/outbox and POST /api/provider/outbox/retry on port 8002. Inventory proxies: GET /api/provider-outbox and POST /api/provider-outbox/retry on port 8000. These unauthenticated controls are for the local demonstration; production requires restricted access.
 
 The pending-details navigation issue is deferred in docs/backlog.md at the user's request.
 
-The new outbox controls passed API outage/retry checks and the frontend build. Fresh browser verification of those controls was blocked by an unavailable browser connection.
+Testing can create one deterministic delivery failure. It changes one provider device, records one pending outbox row with a simulated broker error and opens Activity. Browser verification confirmed that the automatic publisher leaves the deferred row pending and that manual recovery publishes exactly one notification.
