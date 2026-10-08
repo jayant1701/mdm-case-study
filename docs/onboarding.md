@@ -82,7 +82,7 @@ Provider adapters use interfaces; an abstract base class is not required.
 | `TargetedDeviceProvider` | Read one device or a complete snapshot | `HttpMockProviderAdapter` in Docker; `MockProviderAdapter` in local compatibility mode |
 | `RemoteProviderGateway` | Provider snapshot/import, outbox controls, demo controls and provider CRUD | `HttpMockProviderAdapter` |
 | `EventPublisher` | Publish one complete event | `KafkaEventPublisher` |
-| Persistence contracts | Assets, employees, models, sync runs, inbox, checkpoints, outbox and recovery tasks | Classes under `Repositories/Eloquent` |
+| Persistence contracts | Assets, employees, models, sync runs, inbox, checkpoints, outbox and deleted-asset identity | Classes under `Repositories/Eloquent` |
 | `TransactionBoundary` | Run application work in a database transaction, optionally with the inventory provider lock | `DatabaseTransactionBoundary` |
 
 Bindings are registered in `AppServiceProvider`. Services depend on contracts where a boundary is intended. Some contracts return Eloquent types, so the application is not fully independent of Laravel.
@@ -155,8 +155,8 @@ Provider Lab does not call inventory reconciliation or refresh inventory data. T
 
 Inventory migrations are in `backend/database/migrations`:
 
-- employees, device models, assets and one-to-one asset attributes;
-- sync runs and local-deletion restore tasks;
+- active employees, deleted-employee identity, device models, assets and one-to-one asset attributes;
+- sync runs and locally deleted asset identity;
 - event inbox, processed device/shared state and rejected notifications;
 - Laravel jobs and the inventory sync lock.
 
@@ -191,8 +191,8 @@ The feature tests are grouped by behavior:
 - `RemoteProviderSyncTest` — HTTP adapter boundary, recovery fencing and Provider Lab;
 - `EventSyncTest` — event ordering, duplicate/stale handling and shared metadata;
 - `KafkaNotificationReceiverTest` — durable receipt, offsets and quarantine;
-- `EmployeeTombstoneTest` — local employee/asset deletion policy;
+- `EmployeeTombstoneTest` — separate deleted-employee identity plus full, targeted and event-driven restoration;
 - `PersistenceBoundaryTest` — rollback behavior behind repository contracts;
-- `NumericStateTest` — stable numeric comparison after JSON/database round trips.
+- `NumericStateTest` — stable numeric and legacy-event comparison after JSON/database round trips.
 
 Run backend tests from `backend` and the frontend production build from `frontend`. The exact commands and current results are in the main README.

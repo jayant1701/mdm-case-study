@@ -6,7 +6,7 @@ The mock Jamf provider and inventory backend use the same Laravel source but run
 
 The provider runs only database/provider-migrations. It owns provider_devices, provider_generation and producer_outbox. It cannot access inventory credentials.
 
-The inventory runs database/migrations. It owns assets, employees, asset attributes, recovery tasks, event inbox, checkpoints, shared metadata ordering, sync history, rejected notifications and job records. Legacy local-provider tables remain for compatibility tests and are not the source store in this deployment.
+The inventory runs database/migrations. It owns active and deleted employee identity, assets, asset attributes, deleted-asset identity, event inbox, checkpoints, shared metadata ordering, sync history, rejected notifications and job records. Legacy local-provider tables remain for compatibility tests and are not the source store in this deployment.
 
 ## Device changes
 
@@ -32,9 +32,13 @@ Sync Now requests the complete current provider snapshot. Recovery applies its d
 
 POST /api/sync is the assignment-compatible path: the inventory backend reads the supplied JSON, imports it through the provider HTTP boundary and reconciles the returned versioned snapshot. The normal UI Sync Now path calls POST /api/sync/provider and reads only the provider HTTP snapshot. Reset demo reloads the fixture into the provider, clears local inventory state and leaves inventory empty until Sync Now is selected. Provider generations and device versions remain monotonic during reset so a delayed pre-reset Kafka event is older than the new provider snapshot.
 
-Local asset deletion saves provider identity and device name in RestoreTask and removes only inventory data. Testing lists pending local deletions without exposing a restore action. Full reconciliation can recreate an assigned device that still exists upstream. The targeted restoration service remains an internal recovery path and validates the provider identity/version.
+Local asset deletion saves provider identity, serial, device name and deletion time in `deleted_assets`, then removes only inventory data. Testing lists those local deletions without exposing a restore action. Full reconciliation can recreate an assigned device that still exists upstream. The targeted restoration service remains an internal recovery path and validates the provider identity/version. A confirmed provider removal or unassignment removes the deleted-asset row because there is nothing to restore.
 
-Employee deletion retains internal ID/email/deletion time, clears name/phone and preserves asset links. Relevant source events or reconciliation may reactivate that employee.
+Employee deletion removes the active `employees` row and stores only its original ID, email and deletion time in `deleted_employees`. Assets retain `deleted_employee_id` while `employee_id` becomes null. An assigned-device event, complete reconciliation or targeted provider lookup restores the same employee ID, relinks the assets and removes the tombstone. The provider IDs needed for targeted lookup already live on the retained assets.
+
+`report_date` is a freshness watermark: an older provider report cannot overwrite a newer asset state. `report_date` and `last_contact_at` do not create events by themselves, so routine reporting/contact updates cannot flood Kafka. Event version and provider generation remain the ordering mechanism.
+
+Device model and fixed configuration are stored together. Manufacturer plus model identifier is unique; model name, platform, processor and core count are shared. Conflicting non-null fixed metadata fails the transaction. RAM, storage and battery remain asset-specific.
 
 ## Persistence and concurrency
 

@@ -66,15 +66,17 @@ Normal provider POST, PATCH and DELETE operations update the provider database a
 | `id` | `provider_device_id`; identifies the upstream record for events and targeted lookups |
 | `hardware.serialNumber` | `assets.serial_code`; identifies the physical asset locally |
 | `userAndLocation.email` | Employee business identifier and assignment signal |
-| `userAndLocation.realname`, `phone` | Employee metadata |
+| `userAndLocation.username`, `realname`, `position`, `phone` | Employee metadata |
 | `general.name`, `udid`, purchasing fields | Asset metadata |
-| `hardware.make`, `modelIdentifier`, `model` | Shared device-model identity and description |
-| RAM, storage, processor, cores, battery | Per-asset attributes because these can vary between devices of the same model |
-| `general.reportDate` | Stored as metadata; excluded from event change detection |
-| `general.lastContactTime` | Not stored and does not create an event |
-| `site` | Not stored because the assignment has no site model or site behavior |
+| `hardware.make`, `modelIdentifier`, `model`, `processorType`, `coreCount` and `general.platform` | Shared device-model and configuration data |
+| RAM, storage and battery | Per-asset attributes because these can vary between physical devices |
+| `general.reportDate` | Asset freshness watermark; an older report cannot overwrite newer asset state |
+| `general.lastContactTime` | Stored on the asset but excluded from event change detection |
+| `general.site.id`, `general.site.name` | Stored on the asset; `-1` / `None` is normalized to no site |
 
-The response example discussed during design included `site: {"id":"-1","name":"None"}`, which appears to represent no site assignment. The checked-in `api-mock-response.json` does not contain a `site` field, and the mapper does not store one. In either case, site is separate from employee assignment; this implementation determines employee assignment from email.
+The supplied response uses `site: {"id":"-1","name":"None"}`, so both local site fields are `null`. Site is separate from employee assignment; assignment is determined only from employee email.
+
+This implementation treats the model identifier, manufacturer, model name, platform, processor and core count as shared model/configuration data. A conflicting non-null value for the same manufacturer and model identifier rejects the sync instead of silently changing every asset that references the model. Missing or null model metadata does not erase an existing known value.
 
 JSON order, increasing provider IDs, purchase date and report date are not trusted as change cursors. The supplied contract does not guarantee those properties, and none of them reliably represents removals.
 
@@ -159,11 +161,12 @@ At larger scale, add `company_id` to all identities and event keys. Partition wo
 
 | Entity | Purpose |
 |---|---|
-| `employees` | Internal ID, unique email, name, phone and soft-deletion time |
-| `device_models` | Manufacturer, model identifier and shared model name; unique by manufacturer + model identifier |
-| `assets` | Unique serial, current employee/model references, device metadata, provider and provider device ID |
-| `asset_attributes` | One row per asset for RAM, storage, processor, cores and battery condition |
-| `restore_tasks` | Provider ID, serial, device name and deletion status retained after a local asset deletion |
+| `employees` | Active employees: internal ID, unique email, username, name, position, phone and timestamps |
+| `deleted_employees` | Deleted employee identity only: original employee ID, unique email and deletion time |
+| `device_models` | Manufacturer, model identifier, model name, platform, processor and cores; unique by manufacturer + model identifier |
+| `assets` | Unique serial, active/deleted employee reference, device-model reference, provider identity, purchase data, report/contact times and site fields |
+| `asset_attributes` | One row per asset for mutable RAM, storage and battery values |
+| `deleted_assets` | Provider ID, serial, device name and deletion time retained after a local asset deletion |
 | `sync_runs` | Sync mode, status, counters, timestamps and error |
 | `event_inboxes` | Durable incoming event payload, processing status, attempts and error |
 | `device_event_states` | Last accepted version/state per provider device; retained after asset deletion |
@@ -171,6 +174,19 @@ At larger scale, add `company_id` to all identities and event keys. Partition wo
 | `sync_locks` | Inventory transaction lock used to serialize sync/event/recovery changes |
 | `jobs`, `failed_jobs` | Laravel queue storage |
 | `rejected_notifications` | Invalid or conflicting Kafka messages retained for investigation |
+
+Core schema rules:
+
+| Table | Main columns and constraints |
+|---|---|
+| `employees` | `id` primary key; `email` unique; `username`, `name`, `position`, `phone`; timestamps |
+| `deleted_employees` | `employee_id` primary key and original employee ID; `email` unique; `deleted_at`; no duplicated personal metadata |
+| `device_models` | `id` primary key; `manufacturer` + `model_identifier` unique; `model_name`, `platform`, `processor_type`, `core_count`; no row timestamps |
+| `assets` | `id` primary key; `serial_code` unique; nullable `employee_id` and `deleted_employee_id`; nullable `device_model_id`; `provider` + `provider_device_id` unique; name, UDID, purchase fields, `report_date`, `last_contact_at`, `site_provider_id`, `site_name`; timestamps |
+| `asset_attributes` | One row per `asset_id`; `ram_gb`, `storage_gb`, `battery_capacity_percent`; timestamps |
+| `deleted_assets` | Provider, provider device ID, serial, device name and `deleted_at`; unique by provider + serial |
+
+An imported asset is assigned to either an active employee or a deleted-employee identity. Unassigned provider devices are removed instead of being stored with both references empty. Repository transactions maintain this rule during employee deletion and restoration.
 
 ### Provider database
 
@@ -184,13 +200,13 @@ The provider and inventory use separate MySQL databases and credentials. Migrati
 
 `provider_device_id` and serial serve different purposes. Serial is the local physical-asset identity. Provider device ID is the upstream record identity used for events, version tracking and targeted provider lookups. Both are retained because neither should silently change to represent a different device.
 
-`DeviceModel` and `AssetAttributes` are intentionally different. Model identity and description are shared, while installed RAM, storage and battery state can vary per physical asset. The implementation does not assume every hardware property is immutable for the life of a model identifier.
+`DeviceModel` contains the shared model and fixed configuration assumed by this case study. `AssetAttributes` contains RAM, storage and battery state that can vary per physical asset. If the real provider allows processor or core-count upgrades without changing `modelIdentifier`, those fields should move back to the asset level or a separate configuration entity.
 
 ## Delete and reconciliation behavior
 
 ### Local asset deletion
 
-1. Save provider ID, serial, device name and deletion time in `restore_tasks`.
+1. Save provider ID, serial, device name and deletion time in `deleted_assets`.
 2. Delete the local asset and its cascading attributes.
 3. Keep the employee and provider record unchanged.
 4. Show the retained identity as a locally deleted device under Testing.
@@ -199,9 +215,9 @@ The UI has no restore button. **Sync Now** performs complete reconciliation, so 
 
 ### Local employee deletion
 
-The employee row is soft deleted: its ID, email and deletion time remain, while name and phone are cleared. Linked assets remain and display **Deleted user (email)**. A later event or full sync can reactivate the same employee.
+The active row is removed from `employees`. A small row containing its original ID, email and deletion time is written to `deleted_employees`. Linked assets set `employee_id` to `null` and retain `deleted_employee_id`, so they display **Deleted user (email)** without keeping the deleted person in the active employee table.
 
-This choice preserves asset ownership history while meeting the required behavior that sync recreates a locally deleted employee. A strict physical-row deletion would require a separate tombstone/identity table to keep the same information.
+An assigned device event, a complete reconciliation, or the targeted recovery endpoint recreates the active employee with the same internal ID, relinks all retained assets and removes the `deleted_employees` row. Targeted recovery gets the relevant provider devices by the provider IDs already stored on those assets; the tombstone does not duplicate that list.
 
 ### Provider removal or unassignment
 
@@ -265,7 +281,7 @@ Inventory endpoints are on port 8000:
 | GET | `/api/assets`, `/api/assets/{id}` | List assets and read details |
 | GET | `/api/employees`, `/api/employees/{id}` | List active employees and read one employee with complete assigned-device details |
 | DELETE | `/api/assets/{id}` | Delete only the local asset and retain recovery identity |
-| DELETE | `/api/employees/{id}` | Soft delete only the local employee |
+| DELETE | `/api/employees/{id}` | Delete the active employee locally and retain the identity tombstone |
 | POST | `/api/sync` | Assignment-compatible direct fixture import and reconciliation |
 | POST | `/api/sync/provider` | Reconcile with the current provider snapshot; used by Sync Now |
 | GET | `/api/deleted-assets` | List pending local asset deletions |
@@ -287,7 +303,7 @@ The demo reset/failure routes are registered only in local/testing environments.
 
 ## Verification
 
-The backend suite completed successfully: **61 tests and 404 assertions**. The React production build completed successfully.
+The backend suite completed successfully: **66 tests and 429 assertions**. The React production build and Laravel formatting check completed successfully. The migration also completed against the existing MySQL Docker volume, including legacy event records created before the new nullable fields existed.
 
 Automated tests cover initial/repeated sync, RAM and assignment changes, missing/invalid data, local deletion and recreation, provider CRUD, transactional outbox behavior, retries, duplicate/stale events, Kafka receipt/quarantine rules, timestamp-only suppression, remote reconciliation and adapter boundaries.
 
@@ -309,7 +325,7 @@ Backend test command:
 ```sh
 cd backend
 composer install
-php vendor/phpunit/phpunit/phpunit
+php vendor/bin/phpunit
 ```
 
 Frontend build command:
