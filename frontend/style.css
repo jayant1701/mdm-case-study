@@ -110,6 +110,24 @@ article {
   padding: 12px;
   overflow-wrap: anywhere;
 }
+.success {
+  background: #e6f5eb;
+  color: #176338;
+  padding: 14px;
+  border-radius: 7px;
+}
+.pending {
+  border-color: #d99d23;
+  background: #fff8e6;
+}
+.testing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+.testing-grid section {
+  margin: 0;
+}
 input {
   font: inherit;
   padding: 10px;

@@ -133,75 +133,94 @@ export function AssetDetails({ asset, onClose }) {
   );
 }
 
-export function Activity({
-  outbox,
-  onRetryDelivery,
+export function Activity({ outbox, onRetryDelivery, busy, onRefresh }) {
+  return (
+    <>
+      <h2>Notification delivery</h2>
+      <p>
+        The provider outbox holds notifications that have not yet been accepted
+        by Kafka. Automatic processing continues in the background.
+      </p>
+      {outbox.unavailable ? (
+        <p role="status">Provider outbox unavailable: {outbox.unavailable}</p>
+      ) : outbox.pending === 0 ? (
+        <p className="success" role="status">
+          Outbox empty — all notifications have been delivered to Kafka.
+        </p>
+      ) : (
+        <section className="pending">
+          <strong>
+            {outbox.pending} notification{outbox.pending === 1 ? "" : "s"}{" "}
+            waiting for Kafka.
+          </strong>
+          <p>Process them now, or leave the automatic publisher to retry.</p>
+          <button disabled={busy} onClick={onRetryDelivery}>
+            Process pending notifications
+          </button>
+        </section>
+      )}
+      <button disabled={busy} onClick={onRefresh}>
+        Refresh status
+      </button>
+    </>
+  );
+}
+
+export function Testing({
   events,
   runs,
   busy,
-  onSend,
+  onImport,
+  onScan,
   onRestore,
   onRefresh,
   onRetry,
 }) {
   return (
     <>
-      <h2>Simulated provider notifications</h2>
+      <h2>Testing tools</h2>
       <p>
-        Edit the source JSON, then explicitly import its changes. Provider API
-        edits are already queued automatically. Complete device state is queued,
-        so the worker does not fetch the source again. Changes to report date or
-        last contact alone produce no notification. Full Sync Now establishes a
-        baseline; unchanged scans emit nothing.
+        These controls exercise the supplied mock JSON and recovery workflows.
+        Normal provider changes use the provider API, outbox and Kafka.
       </p>
+      <div className="testing-grid">
+        <section>
+          <h3>Reload the supplied response</h3>
+          <p>
+            Treat the JSON file as a complete provider snapshot. This can
+            replace changes previously made through the mock provider API.
+          </p>
+          <button disabled={busy} onClick={onImport}>
+            Import source JSON
+          </button>
+        </section>
+        <section>
+          <h3>Detect mock-file changes</h3>
+          <p>
+            Compare the JSON file with provider state and queue only meaningful
+            changes. Report-date-only changes are ignored.
+          </p>
+          <button disabled={busy} onClick={onScan}>
+            Scan JSON and queue changes
+          </button>
+        </section>
+        <section>
+          <h3>Restore local deletions</h3>
+          <p>
+            Look up locally deleted assets by provider ID and restore those that
+            still exist and remain assigned.
+          </p>
+          <button disabled={busy} onClick={onRestore}>
+            Restore locally deleted assets
+          </button>
+        </section>
+      </div>
       <div className="controls">
-        <button disabled={busy} onClick={onSend}>
-          Import JSON changes and queue events
-        </button>{" "}
-        <button disabled={busy} onClick={onRestore}>
-          Restore locally deleted assets
-        </button>
         <button disabled={busy} onClick={onRefresh}>
-          Refresh activity
+          Refresh test results
         </button>
       </div>
-      <h3>Delivery to Kafka</h3>
-      <p>
-        Every notification is saved in the provider outbox first. Waiting means
-        Kafka delivery has not been acknowledged. Published means Kafka accepted
-        it; inventory processing may still be pending. Automatic retries run in
-        the background.
-      </p>
-      {outbox.unavailable ? (
-        <p role="status">Provider outbox unavailable: {outbox.unavailable}</p>
-      ) : (
-        <>
-          <p>{outbox.pending} notifications waiting for delivery.</p>
-          <button disabled={busy || !outbox.pending} onClick={onRetryDelivery}>
-            Retry pending delivery
-          </button>
-          {outbox.data.map((notification) => (
-            <article key={notification.event_id}>
-              <strong>
-                {notification.device_name}:{" "}
-                {notification.status === "pending"
-                  ? "Waiting for Kafka"
-                  : "Published to Kafka"}
-              </strong>
-              <p>
-                Delivery attempts: {notification.attempts} ·{" "}
-                {notification.created_at}
-              </p>
-              {notification.last_error && (
-                <p className="error">
-                  Last delivery error: {notification.last_error}
-                </p>
-              )}
-            </article>
-          ))}
-        </>
-      )}
-      <h3>Inventory processing</h3>
+      <h3>Inventory event processing</h3>
       {!events.length && <p>No notifications yet.</p>}
       {events.map((e) => (
         <article key={e.id}>
@@ -221,7 +240,7 @@ export function Activity({
           )}
         </article>
       ))}
-      <h3>Recent sync runs</h3>
+      <h3>Synchronization runs</h3>
       {runs.map((r) => (
         <article key={r.id}>
           {r.mode} · {r.status} · {r.started_at}

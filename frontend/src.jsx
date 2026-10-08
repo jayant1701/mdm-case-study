@@ -1,6 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AssetList, EmployeeList, AssetDetails, Activity } from "./views.jsx";
+import {
+  AssetList,
+  EmployeeList,
+  AssetDetails,
+  Activity,
+  Testing,
+} from "./views.jsx";
 import "./style.css";
 
 async function request(path, options = {}) {
@@ -109,21 +115,19 @@ function App() {
           <small>LOCAL MDM DEMO</small>
           <h1>Device inventory</h1>
           <p>
-            Sync Now uses current provider state. Import source JSON explicitly
-            reloads the fixture.
+            Sync Now reconciles the inventory with the current provider state.
+            Mock-data controls are available under Testing.
           </p>
         </div>
         <button disabled={busy} onClick={() => sync("provider")}>
           {busy ? "Working…" : "Sync Now"}
         </button>
-        <button disabled={busy} onClick={() => sync("file")}>
-          Import source JSON
-        </button>
       </header>
       <nav>
-        {["assets", "employees", "activity"].map((t) => (
+        {["assets", "employees", "activity", "testing"].map((t) => (
           <button
             className={tab === t ? "active" : ""}
+            aria-current={tab === t ? "page" : undefined}
             key={t}
             onClick={() => setTab(t)}
           >
@@ -192,10 +196,17 @@ function App() {
               );
             })
           }
+          busy={busy}
+          onRefresh={() => action(() => refresh())}
+        />
+      )}
+      {tab === "testing" && (
+        <Testing
           events={events}
           runs={runs}
           busy={busy}
-          onSend={sendEvent}
+          onImport={() => sync("file")}
+          onScan={sendEvent}
           onRestore={() =>
             action(async () => {
               const r = await request("/restorations", { method: "POST" });
