@@ -9,7 +9,7 @@
    - [Back-of-the-envelope estimate](#back-of-the-envelope-estimate)
    - [Solutions considered](#solutions-considered)
    - [Recommended solution](#recommended-solution)
-     - [Three synchronization paths](#three-synchronization-paths)
+     - [Two runtime workflows](#two-runtime-workflows)
    - [Delivered scope](#delivered-scope)
 2. [Remaining scope](#2-remaining-scope)
 3. [Codebase onboarding](#3-codebase-onboarding)
@@ -108,7 +108,7 @@ The expected annual change volume is:
 
 At 2 KB per device, one complete fleet import transfers about 2 GB to 200 GB. Repeating that every day transfers about 730 GB to 73 TB per year, mostly unchanged data.
 
-Only meaningful device changes count toward the 11% estimate. Routine `reportDate` and contact-time changes are stored but should not trigger synchronization by themselves. The calculation shows why repeated full-inventory synchronization is expensive and motivates evaluating incremental approaches.
+The calculation shows why repeated full-inventory synchronization is expensive and motivates evaluating incremental approaches.
 
 ### Solutions considered
 
@@ -117,20 +117,18 @@ The choices cover separate parts of the problem: detecting changes, deciding wha
 | Area | Solution | Use / drawback |
 |---|---|---|
 | Change detection | Full synchronization | Keep for initial import and recovery; wasteful for every change |
-| Change detection | Scheduled polling | Simple fallback, but repeatedly transfers unchanged data |
-| Change detection | `reportDate` cursor | Reject without a guarantee that all changes and removals update it |
-| Change detection | Increasing device ID | Reject; misses edits, unassignments and removals |
-| Change detection | Purchase-date filter | Reject; later changes do not alter purchase date |
-| Change detection | Changed-device list API | Useful future option: ask the provider which device IDs changed, then fetch only those devices; unavailable in the supplied contract |
+| Change detection | Scheduled polling with a `reportDate` cursor | Efficient only if the API can filter by `reportDate` and guarantees every edit, reassignment and removal advances it; the supplied contract guarantees neither. Using `lastContactTime` instead would be noisy because routine check-ins change it |
+| Change detection | Increasing device ID | Finds later additions only; misses edits, reassignments, removals and missing records below the latest ID |
+| Change detection | Purchase-date filter | Misses later edits, removals and reassignment of the same device to another employee |
 | Notification contents | ID-only notification plus provider GET | Smaller notification, but every change needs another provider request |
-| Notification contents | Complete-device notification | Supports replay without a provider read, but uses more storage |
+| Notification contents | Complete-device notification | Carries the device, employee and hardware state, so it can be replayed without another provider request; the message is larger |
 | Notification contents | Changed-fields notification | Smaller, but partial merging makes ordering and replay harder |
 | Notification delivery | Direct outbox-to-HTTP | Simple for one consumer, but replay and buffering remain tied to the provider database rather than an independent retained stream |
 | Deployment | Serverless alternative | Viable with a different technology stack; described at the end of this document |
 
 ### Recommended solution
 
-I recommend Kafka-based event-driven synchronization for normal provider changes, with complete snapshot reconciliation for recovery. The average traffic estimate does not require Kafka by itself. Kafka is selected because it stores events for replay, buffers bursts and lets the provider and inventory services operate independently.
+I recommend Kafka-based event-driven synchronization for normal changes and Sync Now for recovery. The average traffic does not require Kafka by itself. Kafka is chosen because it retains events, absorbs bursts and separates the provider from the inventory service.
 
 The normal event path is:
 
@@ -141,55 +139,46 @@ The normal event path is:
 5. The consumer stores the event in the inventory inbox before acknowledging its Kafka offset.
 6. The inventory worker applies the saved event to local inventory and records the result.
 
-Kafka retains records for a configured period; the local environment keeps them for seven days on a Docker volume. This supports replay and lets the inventory service catch up after an outage. Kafka cannot join the provider's MySQL transaction, so the outbox closes the gap between saving a provider change and publishing its event. The inventory inbox closes the gap between receiving an event and applying it. Device versions and event IDs make retries safe and prevent an older event from overwriting newer state.
+The **outbox** makes the provider change and its notification one MySQL transaction. Kafka cannot join that transaction. If Kafka is unavailable, the notification remains in the outbox for retry.
+
+The **inbox** saves an event in inventory MySQL before the consumer acknowledges it to Kafka. If the worker crashes before applying it, the saved event can be retried instead of being lost.
 
 For event-size planning, assume 2 KB for a complete-device event and 250 bytes, or 0.25 KB, for an ID-only event. The calculations use decimal KB and GB.
 
-| Changes/year | Complete-device events | ID-only events | Additional complete-event data |
+| Changes/year | Complete-device events | ID-only events | Extra data for complete events |
 |---:|---:|---:|---:|
 | 110,000 | 0.22 GB/year | 0.0275 GB/year | `110,000 × 1.75 KB ≈ 0.19 GB/year` |
 | 11 million | 22 GB/year | 2.75 GB/year | `11,000,000 × 1.75 KB ≈ 19.25 GB/year` |
 
-With 30-day retention, the additional data occupies approximately `annual difference × 30 ÷ 365`: 0.016 GB to 1.58 GB for one stored copy, or 0.047 GB to 4.75 GB for three copies. Three copies are a production planning assumption. The local environment has one broker and one copy.
+Kafka partitions allow consumers to scale across hosts, and a production broker cluster can replicate events for availability. This provides one durable event stream instead of making each provider host deliver changes directly to inventory hosts. The outbox is still required, and multiple publishers must safely claim its rows. The local case study uses one broker; add brokers, partitions or database sharding only when availability requirements or measurements justify them.
 
-The estimated average rate does not justify database sharding or additional consumer capacity in this case study. Add outbox indexes when pending-row queries become slow, add Kafka partitions and consumers when measured lag grows, and consider company-based sharding only when database measurements require it.
+#### Two runtime workflows
 
-#### Three synchronization paths
+The provider-backed application has two normal runtime workflows. `POST /api/sync` remains only as the assignment-compatible fixture-import path.
 
-| Path | Trigger | Purpose |
+| Workflow | Trigger | Purpose |
 |---|---|---|
-| Fixture import | `POST /api/sync` | Meet the assignment requirement by reading the supplied Jamf-format JSON and reconciling it with MySQL |
 | Automatic event processing | Provider change | Apply one changed device through the outbox, Kafka and inbox without fetching the full inventory |
 | Sync Now | User button | Retry up to ten pending outbox messages, then make local inventory match a complete provider snapshot |
 
-The automatic event path is the recommended normal operation. The fixture import remains available for the assignment, and Sync Now provides explicit recovery and reconciliation.
+The consumer waits for Kafka records; it does not poll Jamf. Sync Now remains necessary because an event stream cannot rediscover a locally deleted record when nothing changed upstream.
 
-The consumer waits for Kafka records; it does not repeatedly query Jamf. This applies changes without waiting for a user or transferring unchanged devices. Sync Now remains necessary because an event stream cannot prove that the entire local inventory matches the provider or rediscover a locally deleted record when nothing changed upstream.
+Sync Now:
 
-Sync Now is implemented as follows:
+1. retries up to ten pending outbox notifications;
+2. fetches the provider's complete current state;
+3. validates device identities and versions;
+4. creates, updates, restores or removes local records so they match the provider.
 
-1. React sends `POST /api/sync/provider` to the inventory API.
-2. `InventoryController` calls `JamfSyncService::reconcileProvider()`.
-3. `RemoteProviderSyncService` uses `RemoteProviderGateway` to retry up to ten pending provider-outbox notifications to Kafka.
-4. The HTTP provider adapter requests the complete versioned provider snapshot.
-5. The service validates snapshot generation, device identities and versions before applying data.
-6. `DeviceReconciler` creates or updates assigned assets and employees, restores valid local deletions, and removes assets that are absent, removed or unassigned upstream.
-7. `JamfSyncService` stores the reconciliation and outbox counters in `sync_runs`.
+Outbox publication and snapshot retrieval are separate provider calls. A successful publication is not rolled back if the later snapshot fails. In healthy operation, the event path has already applied every change and Sync Now finds no differences. The complete snapshot can still recover a locally deleted record, an event that was missed or expired, or provider state introduced outside the normal mutation path.
 
-Outbox publication and snapshot retrieval are separate provider calls. A successful publication is not rolled back if the later snapshot fails. In healthy operation, the event path has already applied every change and Sync Now finds no differences. The complete snapshot can still recover a locally deleted record, an event that was missed or expired, or a change that never entered the outbox.
+Duplicate and late events are handled separately from Sync Now:
 
-Key decisions:
+- `event_inboxes.event_id` prevents the same event from being processed twice;
+- `device_event_states` stores the latest version for each provider device;
+- `shared_event_states` stores separate ordering checkpoints for employee and device-model data shared by several assets.
 
-| Question | Decision | Reason |
-|---|---|---|
-| How are normal changes synchronized? | Complete-device events | Transfer only changed devices and replay without a provider lookup |
-| How are provider/local differences repaired? | Complete snapshot reconciliation | Recover missed events, local deletions and an empty inventory |
-| Why Kafka? | Persistent event transport | Retained replay, burst buffering and service independence |
-| Why a MySQL outbox when Kafka persists events? | Transactional outbox | Kafka cannot participate in the provider's MySQL transaction |
-| Why an inventory inbox? | Persist before acknowledging Kafka | Prevent an acknowledged event from being lost before inventory processing |
-| How are duplicates and late events handled? | Event ID, device version and provider generation | Make at-least-once delivery safe and prevent older state from winning |
-| How are provider differences isolated? | Adapter interfaces | Keep Jamf-specific HTTP and response mapping outside synchronization rules |
-| How is repeated model data reduced? | Device model plus per-asset attributes | Share fixed model configuration while keeping RAM, storage and battery per asset |
+This separation matters because an older event for one device may still contain employee information that is shared with another device. The shared checkpoint prevents that older employee or model data from replacing newer shared data.
 
 ### Delivered scope
 
@@ -203,7 +192,7 @@ The delivered application is a local case study with one mock Jamf provider and 
 
 1. **Multi-tenancy.** Add `company_id` to every tenant-owned record, event and provider connection. Replace global uniqueness with tenant-scoped unique indexes, including `(company_id, serial_code)`, `(company_id, email)` and `(company_id, provider, provider_device_id)`. Repository methods and API queries must require the authenticated company scope. Provider credentials must also be stored per company.
 
-2. **Paginated snapshot reconciliation.** The current adapter materializes one complete response in memory. A real adapter should request every page and either stage or stream the records into one validated reconciliation run. If any page fails or the snapshot is inconsistent, fail the run without treating missing devices as removals. Only a successfully completed snapshot may remove assets by absence. Schedule this reconciliation periodically to recover missed events.
+2. **Paginated Sync Now.** A real Jamf response may span several pages. Sync Now must obtain every page as one complete, consistent snapshot before deleting a local asset as missing; otherwise, a failed or changing page set could be mistaken for a deleted device.
 
 3. **Authentication and authorization.** Verify the real Jamf authentication method and keep each company's provider credentials encrypted outside application code. Authenticate application users, resolve their `company_id`, and authorize every asset, employee, sync and operational action within that company. Restrict retry/outbox controls to operational roles and disable demo endpoints outside local/testing environments.
 
@@ -371,7 +360,7 @@ Provider Lab writes provider state and a durable outbox notification. The normal
 
 `files/api-mock-response.json` represents one complete Jamf API response. It is not an event log and does not contain created, updated or skipped counters. The inventory service calculates those counters by comparing provider state with local state.
 
-`POST /api/sync` is the assignment-compatible path that reads this file, imports it into the mock provider and reconciles the resulting snapshot. **Reset demo** also reloads provider state from the fixture.
+The UI does not use a direct fixture-import action. `POST /api/sync` remains as an assignment-compatibility endpoint that reads the file, imports it into the mock provider and updates local inventory. **Reset demo** also reloads provider state from the fixture.
 
 The automatic event path does not read the fixture. **Sync Now** retries pending outbox delivery and reads the provider's current HTTP snapshot, not the file.
 
@@ -388,7 +377,7 @@ Reset clears the provider outbox, reloads provider state from the fixture withou
 | `general.name`, `udid`, purchasing fields | Asset metadata |
 | Manufacturer, model identifier, model, platform, processor and cores | Shared device-model/configuration data |
 | RAM, storage and battery | Per-asset attributes |
-| `general.reportDate` | Freshness watermark; an older report cannot overwrite newer asset state |
+| `general.reportDate` | Freshness watermark included in change detection; an older report cannot overwrite newer asset state |
 | `general.lastContactTime` | Stored but excluded from semantic event detection |
 | `general.site.id`, `general.site.name` | Asset site; `-1` and `None` become `null` |
 
@@ -396,7 +385,7 @@ Site is separate from assignment. Employee email alone determines whether a devi
 
 Manufacturer, model identifier, model name, platform, processor and core count are treated as fixed shared configuration. Conflicting non-null values for the same manufacturer and model identifier reject the change. Missing values do not erase known values. If a real provider permits processor or core upgrades without changing the model identifier, those fields should move to the asset level or a separate configuration entity.
 
-JSON order, increasing provider IDs, purchase date and report date are not change cursors. None reliably represents edits and removals under the supplied contract.
+JSON order, increasing provider IDs, purchase date and `reportDate` are not reliable query cursors under the supplied contract. A `reportDate` change can produce an event, but the contract does not guarantee that every edit, reassignment or removal updates it. `lastContactTime` changes routinely and is excluded from change detection.
 
 ## 6. Implemented design
 
@@ -614,7 +603,7 @@ An assigned-device event, complete reconciliation or targeted recovery recreates
 
 A provider removal or missing employee email removes the local asset because only assigned devices are imported. It does not delete the employee. Provider DELETE retains a provider tombstone and emits `device.removed`; unassignment emits `device.unassigned`.
 
-`report_date` is a freshness watermark, not an event cursor. `report_date` and `last_contact_at` do not trigger events by themselves, which prevents routine reporting timestamps from flooding Kafka.
+`report_date` is stored as a freshness watermark and a change to it can produce an event. It is not used as a query cursor because the supplied contract does not guarantee that every change updates it. `last_contact_at` is stored but does not produce events by itself.
 
 ## 9. Failure handling and Activity
 
@@ -723,7 +712,7 @@ A previous Prime Video subscription and buy/rent workload serving millions of cu
 
 ## 12. Verification
 
-The backend suite completed with **67 tests and 443 assertions**. Laravel formatting and the React production build also completed successfully.
+The backend suite completed with **67 tests and 450 assertions**. Laravel formatting and the React production build also completed successfully.
 
 Test groups:
 
