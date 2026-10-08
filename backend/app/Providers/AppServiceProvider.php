@@ -7,6 +7,7 @@ use App\Contracts\Persistence\AssetRepository;
 use App\Contracts\Persistence\DeviceModelRepository;
 use App\Contracts\Persistence\EmployeeRepository;
 use App\Contracts\Persistence\EventInboxRepository;
+use App\Contracts\Persistence\EventStateRepository;
 use App\Contracts\Persistence\ProviderLockRepository;
 use App\Contracts\Persistence\RestoreTaskRepository;
 use App\Contracts\Persistence\SyncRunRepository;
@@ -18,6 +19,7 @@ use App\Repositories\Eloquent\EloquentAssetRepository;
 use App\Repositories\Eloquent\EloquentDeviceModelRepository;
 use App\Repositories\Eloquent\EloquentEmployeeRepository;
 use App\Repositories\Eloquent\EloquentEventInboxRepository;
+use App\Repositories\Eloquent\EloquentEventStateRepository;
 use App\Repositories\Eloquent\EloquentRestoreTaskRepository;
 use App\Repositories\Eloquent\EloquentSyncRunRepository;
 use Illuminate\Support\ServiceProvider;
@@ -29,6 +31,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(DeviceProvider::class, JamfMockProvider::class);
         foreach ([
             AssetRepository::class => EloquentAssetRepository::class,
+            EventStateRepository::class => EloquentEventStateRepository::class,
             EmployeeRepository::class => EloquentEmployeeRepository::class,
             DeviceModelRepository::class => EloquentDeviceModelRepository::class,
             SyncRunRepository::class => EloquentSyncRunRepository::class,

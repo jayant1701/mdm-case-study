@@ -2,8 +2,10 @@
 
 namespace Tests\Feature;
 
+use App\Contracts\DeviceProvider;
 use App\Contracts\Persistence\EventInboxRepository;
 use App\Contracts\Persistence\RestoreTaskRepository;
+use App\Data\DeviceEvent;
 use App\Jobs\ProcessDeviceEvent;
 use App\Models\Asset;
 use App\Models\EventInbox;
@@ -38,14 +40,17 @@ final class PersistenceBoundaryTest extends InventoryTestCase
     {
         Queue::fake();
         $this->sync();
-        $inbox = app(EventReceiver::class)->accept(['event_id' => 'ack-failure', 'provider_device_id' => '101', 'type' => 'device.changed']);
+        $record = app(DeviceProvider::class)->findByProviderId('101');
+        $device = DeviceEvent::fromRecord($record);
+        $device['specifications']['ram_gb'] = 64;
+        $inbox = app(EventReceiver::class)->accept(['event_id' => 'ack-failure', 'provider_device_id' => '101', 'version' => 2, 'producer_generation' => 2, 'type' => 'device.changed', 'device' => $device]);
         $this->source['results'][0]['hardware']['totalRamMegabytes'] = 65536;
         $this->write();
         $actual = app(EventInboxRepository::class);
         $substitute = Mockery::mock(EventInboxRepository::class);
         $substitute->shouldReceive('require')->once()->with($inbox->id)->andReturnUsing(fn ($id) => $actual->require($id));
         $substitute->shouldReceive('markProcessing')->once()->with($inbox->id)->andReturnUsing(fn ($id) => $actual->markProcessing($id));
-        $substitute->shouldReceive('markSucceeded')->once()->with($inbox->id)->andThrow(new RuntimeException('Simulated inbox acknowledgment failure.'));
+        $substitute->shouldReceive('markSucceeded')->once()->with($inbox->id, 'applied')->andThrow(new RuntimeException('Simulated inbox acknowledgment failure.'));
         $substitute->shouldReceive('markFailedAttempt')->once()->with($inbox->id, 'Simulated inbox acknowledgment failure.')->andReturnUsing(fn ($id, $error) => $actual->markFailedAttempt($id, $error));
         $this->app->instance(EventInboxRepository::class, $substitute);
         try {
@@ -66,6 +71,6 @@ final class PersistenceBoundaryTest extends InventoryTestCase
         $this->postJson('/api/sync')->assertStatus(422)->assertJsonPath('message', 'No configured lock row for provider: jamf');
         $this->assertDatabaseCount('assets', 0);
         $this->assertDatabaseCount('employees', 0);
-        $this->assertDatabaseHas('sync_runs',['status' => 'failed']);
+        $this->assertDatabaseHas('sync_runs', ['status' => 'failed']);
     }
 }

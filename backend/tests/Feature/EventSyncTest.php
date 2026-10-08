@@ -2,103 +2,212 @@
 
 namespace Tests\Feature;
 
+use App\Contracts\DeviceProvider;
+use App\Data\DeviceEvent;
 use App\Jobs\ProcessDeviceEvent;
 use App\Models\Asset;
+use App\Models\DeviceEventState;
+use App\Models\Employee;
 use App\Models\EventInbox;
-use App\Models\SyncRun;
+use App\Models\SimulatedProviderDevice;
+use App\Services\DeviceEventSimulator;
 use App\Services\EventProcessor;
 use App\Services\EventReceiver;
 use Illuminate\Support\Facades\Queue;
+use Mockery;
+use Symfony\Component\HttpKernel\Exception\ConflictHttpException;
 use Tests\InventoryTestCase;
 
 class EventSyncTest extends InventoryTestCase
 {
-    private function notification(string $event = 'demo-1', string $device = '101', string $type = 'device.changed'): array
+    private function notification(string $event = 'demo-1', string $id = '101', int $version = 2, int $generation = 2, string $type = 'device.changed'): array
     {
-        return ['event_id' => $event, 'provider_device_id' => $device, 'type' => $type];
+        $record = app(DeviceProvider::class)->findByProviderId($id);
+
+        return ['event_id' => $event, 'provider_device_id' => $id, 'version' => $version, 'producer_generation' => $generation, 'type' => $type, 'device' => DeviceEvent::fromRecord($record)];
     }
 
-    public function test_receipt_is_durable_and_duplicate_event_is_idempotent(): void
+    private function process(EventInbox $event): void
+    {
+        (new ProcessDeviceEvent($event->id))->handle(app(EventProcessor::class));
+    }
+
+    public function test_durable_receipt_duplicate_and_conflicting_identity_or_version(): void
     {
         Queue::fake();
         $this->sync();
-        $this->postJson('/api/events/jamf', $this->notification())->assertStatus(202);
-        $this->postJson('/api/events/jamf', $this->notification())->assertStatus(202);
+        $payload = $this->notification();
+        $this->postJson('/api/events/jamf', $payload)->assertStatus(202);
+        $this->postJson('/api/events/jamf', $payload)->assertStatus(202);
         $this->assertDatabaseCount('event_inboxes', 1);
-        $inbox = EventInbox::first();
-        $job = new ProcessDeviceEvent($inbox->id);
-        $job->handle(app(EventProcessor::class));
-        $job->handle(app(EventProcessor::class));
-        $this->assertSame(1, $inbox->fresh()->attempts);
-        $this->assertSame('succeeded', $inbox->fresh()->status);
-        $this->assertDatabaseCount('assets', 7);
-        $this->assertSame(1, SyncRun::where('mode', 'event')->count());
-    }
-
-    public function test_conflicting_event_id_and_invalid_schema_are_rejected(): void
-    {
-        Queue::fake();
-        $this->postJson('/api/events/jamf', $this->notification())->assertStatus(202);
-        $this->postJson('/api/events/jamf', $this->notification(device: '102'))->assertStatus(409);
+        $changed = $payload;
+        $changed['device']['specifications']['ram_gb'] = 64;
+        $this->postJson('/api/events/jamf', $changed)->assertStatus(409);
+        $changed['event_id'] = 'other-id';
+        $this->postJson('/api/events/jamf', $changed)->assertStatus(409);
         $this->postJson('/api/events/jamf', ['event_id' => 'bad'])->assertUnprocessable();
+        $event = EventInbox::first();
+        $this->process($event);
+        $this->process($event);
+        $this->assertSame(1, $event->fresh()->attempts);
+        $this->assertSame('succeeded', $event->fresh()->status);
     }
 
-    public function test_event_reads_latest_state_and_does_not_remove_unrelated_devices(): void
+    public function test_worker_uses_stored_payload_with_zero_provider_reads_even_when_file_breaks(): void
     {
         Queue::fake();
         $this->sync();
-        $this->postJson('/api/events/jamf', $this->notification(type: 'device.removed'));
-        $this->source['results'][0]['hardware']['totalRamMegabytes'] = 65536;
-        array_pop($this->source['results']);
-        $this->source['totalCount'] = 6;
-        $this->write();
-        (new ProcessDeviceEvent(EventInbox::first()->id))->handle(app(EventProcessor::class));
+        $payload = $this->notification();
+        $payload['device']['specifications']['ram_gb'] = 64;
+        app(EventReceiver::class)->accept($payload);
+        file_put_contents($this->fixture, 'broken');
+        $provider = Mockery::mock(DeviceProvider::class);
+        $provider->shouldNotReceive('snapshot');
+        $provider->shouldNotReceive('findByProviderId');
+        $this->app->instance(DeviceProvider::class, $provider);
+        $this->process(EventInbox::first());
+        $this->assertSame(64.0, Asset::where('provider_device_id', '101')->first()->specifications->ram_gb);
         $this->assertDatabaseCount('assets', 7);
+    }
+
+    public function test_simulator_ignores_heartbeats_but_emits_hardware_changes_with_same_report_date(): void
+    {
+        Queue::fake();
+        $first = app(DeviceEventSimulator::class)->simulate();
+        $this->assertSame(7, $first['emitted']);
+        $this->assertSame(0, app(DeviceEventSimulator::class)->simulate()['emitted']);
+        foreach ($this->source['results'] as &$row) {
+            $row['general']['lastContactTime'] = '2026-10-08T12:00:00Z';
+            $row['general']['reportDate'] = '2026-10-08T12:00:00Z';
+        }unset($row);
+        $this->write();
+        $this->assertSame(0, app(DeviceEventSimulator::class)->simulate()['emitted']);
+        $this->source['results'][0]['hardware']['totalRamMegabytes'] = 65536;
+        $this->write();
+        $next = app(DeviceEventSimulator::class)->simulate();
+        $this->assertSame(1, $next['emitted']);
+        $event = EventInbox::latest('id')->first();
+        $this->assertSame(2, $event->version);
+        $this->assertSame('2026-10-08 12:00:00', $event->payload['device']['asset']['report_date']);
+        $this->process($event);
+        $this->assertSame(64.0, Asset::first()->specifications->ram_gb);
+    }
+
+    public function test_removal_and_unassignment_tombstones_block_stale_resurrection(): void
+    {
+        Queue::fake();
+        $this->sync();
+        $old = $this->notification(event: 'old', version: 2, generation: 2);
+        $remove = $old;
+        $remove['event_id'] = 'remove';
+        $remove['version'] = 3;
+        $remove['producer_generation'] = 3;
+        $remove['type'] = 'device.removed';
+        $removed = app(EventReceiver::class)->accept($remove);
+        $this->process($removed);
+        $this->assertDatabaseMissing('assets', ['provider_device_id' => '101']);
+        $late = app(EventReceiver::class)->accept($old);
+        $this->process($late);
+        $this->assertSame('ignored_stale', $late->fresh()->outcome);
+        $this->assertDatabaseMissing('assets', ['provider_device_id' => '101']);
+        $new = $old;
+        $new['event_id'] = 'readd';
+        $new['version'] = 4;
+        $new['producer_generation'] = 4;
+        $new['type'] = 'device.added';
+        $this->process(app(EventReceiver::class)->accept($new));
+        $this->assertDatabaseHas('assets', ['provider_device_id' => '101']);
+        $unassigned = $new;
+        $unassigned['event_id'] = 'unassigned';
+        $unassigned['version'] = 5;
+        $unassigned['producer_generation'] = 5;
+        $unassigned['type'] = 'device.unassigned';
+        $unassigned['device']['email'] = null;
+        $this->process(app(EventReceiver::class)->accept($unassigned));
+        $this->assertDatabaseMissing('assets', ['provider_device_id' => '101']);
+        $this->assertSame('unassigned', DeviceEventState::where('provider_device_id', '101')->first()->state);
+    }
+
+    public function test_equal_applied_version_conflict_fails_without_writes(): void
+    {
+        Queue::fake();
+        $this->sync();
+        $payload = $this->notification(version: 1, generation: 1);
+        $payload['device']['specifications']['ram_gb'] = 64;
+        $inbox = app(EventReceiver::class)->accept($payload);
+        try {
+            $this->process($inbox);
+            $this->fail('Expected conflict.');
+        } catch (ConflictHttpException $error) {
+            $this->assertStringContainsString('Conflicting payload', $error->getMessage());
+        }
+        $this->assertSame('failed', $inbox->fresh()->status);
+        $this->assertSame(16.0, Asset::where('provider_device_id', '101')->first()->specifications->ram_gb);
+    }
+
+    public function test_full_sync_fences_already_queued_old_payload(): void
+    {
+        Queue::fake();
+        $this->sync();
+        $this->source['results'][0]['hardware']['totalRamMegabytes'] = 32768;
+        $this->write();
+        $this->assertSame(1, app(DeviceEventSimulator::class)->simulate()['emitted']);
+        $queued = EventInbox::first();
+        $this->source['results'][0]['hardware']['totalRamMegabytes'] = 65536;
+        $this->write();
+        $this->sync();
+        $this->process($queued);
+        $this->assertSame('ignored_stale', $queued->fresh()->outcome);
         $this->assertSame(64.0, Asset::where('provider_device_id', '101')->first()->specifications->ram_gb);
     }
 
-    public function test_missing_device_event_removes_only_that_asset(): void
+    public function test_simulator_emits_removal_unassignment_and_readdition(): void
     {
         Queue::fake();
         $this->sync();
-        $this->postJson('/api/events/jamf', $this->notification());
-        array_shift($this->source['results']);
+        $this->assertSame(0, app(DeviceEventSimulator::class)->simulate()['emitted']);
+        $this->source['results'][0]['userAndLocation']['email'] = null;
+        $saved = array_pop($this->source['results']);
         $this->source['totalCount'] = 6;
         $this->write();
-        (new ProcessDeviceEvent(EventInbox::first()->id))->handle(app(EventProcessor::class));
-        $this->assertDatabaseCount('assets', 6);
-        $this->assertDatabaseMissing('assets', ['provider_device_id' => '101']);
+        $this->assertSame(2, app(DeviceEventSimulator::class)->simulate()['emitted']);
+        $this->assertDatabaseHas('event_inboxes', ['provider_device_id' => '101', 'type' => 'device.unassigned']);
+        $this->assertDatabaseHas('event_inboxes', ['provider_device_id' => '107', 'type' => 'device.removed']);
+        foreach (EventInbox::all() as $event) {
+            $this->process($event);
+        }$this->assertDatabaseCount('assets', 5);
+        $this->source['results'][] = $saved;
+        $this->source['totalCount'] = 7;
+        $this->write();
+        $this->assertSame(1, app(DeviceEventSimulator::class)->simulate()['emitted']);
+        $new = EventInbox::latest('id')->first();
+        $this->assertSame('device.added', $new->type);
+        $this->assertSame(3, $new->version);
     }
 
-    public function test_failed_event_remains_visible_and_can_be_retried(): void
+    public function test_shared_employee_metadata_does_not_regress_from_older_other_device(): void
     {
         Queue::fake();
         $this->sync();
-        $this->postJson('/api/events/jamf', $this->notification());
-        $inbox = EventInbox::first();
-        file_put_contents($this->fixture, 'broken');
-        try {
-            (new ProcessDeviceEvent($inbox->id))->handle(app(EventProcessor::class));
-            $this->fail('Expected failure.');
-        } catch (\RuntimeException $e) {
-            $this->assertSame('failed', $inbox->fresh()->status);
-            $this->assertSame(1, $inbox->fresh()->attempts);
-            $this->assertNotNull($inbox->fresh()->last_error);
-            $this->assertDatabaseCount('assets', 7);
-            $this->assertSame('failed', SyncRun::latest('id')->first()->status);
-        }
-        $this->write();
-        $this->postJson('/api/events/'.$inbox->id.'/retry')->assertStatus(202);
-        (new ProcessDeviceEvent($inbox->id))->handle(app(EventProcessor::class));
-        $this->assertSame('succeeded', $inbox->fresh()->status);
-        $this->assertSame(2, $inbox->fresh()->attempts);
+        $new = $this->notification(event: 'new-name', id: '103', generation: 3);
+        $new['device']['employee']['name'] = 'Latest Alex';
+        $this->process(app(EventReceiver::class)->accept($new));
+        $old = $this->notification(event: 'old-name', generation: 2);
+        $old['device']['employee']['name'] = 'Older Alex';
+        $this->process(app(EventReceiver::class)->accept($old));
+        $this->assertSame('Latest Alex', Employee::where('email', 'alex.smith@company.test')->first()->name);
     }
 
-    public function test_pending_inbox_recovery_closes_dispatch_gap(): void
+    public function test_pending_recovery_and_invalid_snapshot_preserve_baseline(): void
     {
         Queue::fake();
-        $inbox = EventInbox::create($this->notification() + ['provider' => 'jamf', 'payload' => $this->notification(), 'status' => 'pending']);
-        $this->assertSame(1, app(EventReceiver::class)->recover());
-        Queue::assertPushed(ProcessDeviceEvent::class, fn ($job) => $job->inboxId === $inbox->id);
+        app(DeviceEventSimulator::class)->simulate();
+        $this->assertSame(7, app(EventReceiver::class)->recover());
+        Queue::assertPushed(ProcessDeviceEvent::class);
+        $before = SimulatedProviderDevice::pluck('version', 'provider_device_id')->all();
+        file_put_contents($this->fixture,'broken');
+        $this->postJson('/api/simulator/jamf')->assertStatus(422);
+        $this->assertSame($before,SimulatedProviderDevice::pluck('version','provider_device_id')->all());
+        $this->assertDatabaseCount('event_inboxes',7);
     }
 }

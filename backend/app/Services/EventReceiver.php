@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Contracts\Persistence\EventInboxRepository;
 use App\Contracts\Persistence\TransactionBoundary;
+use App\Data\DeviceEvent;
 use App\Jobs\ProcessDeviceEvent;
 use App\Models\EventInbox;
 use Illuminate\Support\Facades\Log;
@@ -14,23 +15,32 @@ final class EventReceiver
 
     public function accept(array $payload): EventInbox
     {
-        $inbox = $this->transactions->withProviderLock('jamf', function () use ($payload) {
-            $existing = $this->events->findByEventId($payload['event_id']);
-            if ($existing) {
-                if ($existing->provider_device_id !== $payload['provider_device_id'] || $existing->type !== $payload['type']) {
-                    abort(409, 'Event ID was already used for different content.');
-                }
-
-                return $existing;
-            }
-
-            return $this->events->recordNotification('jamf', $payload);
-        });
+        $event = DeviceEvent::parse($payload);
+        $inbox = $this->transactions->withProviderLock('jamf', fn () => $this->persist($event));
         if ($inbox->status === 'pending') {
             $this->dispatch($inbox);
         }
 
         return $inbox;
+    }
+
+    /** Caller owns the locked transaction; simulator writes its baseline in that same scope. */
+    public function persist(DeviceEvent $event): EventInbox
+    {
+        $payload = $event->envelope;
+        $existing = $this->events->findByEventId($payload['event_id']);
+        if (! $existing) {
+            $existing = $this->events->findDeviceVersion('jamf', $payload['provider_device_id'], $payload['version']);
+        }
+        if ($existing) {
+            if ($existing->content_hash !== $event->contentHash()) {
+                abort(409, 'Event ID or device version was already used for different content.');
+            }
+
+            return $existing;
+        }
+
+        return $this->events->recordNotification('jamf', $payload);
     }
 
     public function dispatch(EventInbox $inbox): void

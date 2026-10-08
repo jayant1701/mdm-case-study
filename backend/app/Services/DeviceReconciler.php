@@ -11,7 +11,7 @@ use RuntimeException;
 
 final class DeviceReconciler
 {
-    public function __construct(private AssetRepository $assets, private EmployeeRepository $employees, private DeviceModelRepository $models, private RestoreTaskRepository $restorations) {}
+    public function __construct(private AssetRepository $assets, private EmployeeRepository $employees, private DeviceModelRepository $models, private RestoreTaskRepository $restorations, private SharedMetadataPolicy $shared) {}
 
     public function validateIdentities(array $devices): void
     {
@@ -29,7 +29,7 @@ final class DeviceReconciler
         }
     }
 
-    public function apply(DeviceRecord $device, array &$counts): void
+    public function apply(DeviceRecord $device, array &$counts, ?int $generation = null): void
     {
         if (! $device->serial) {
             $counts['skipped_missing_serial']++;
@@ -42,8 +42,15 @@ final class DeviceReconciler
 
             return;
         }
-        $employee = $this->employees->upsertByEmail($device->email, $device->employee);
-        $model = $device->model ? $this->models->upsertIdentity($device->model) : null;
+        $employeeFields = $generation === null ? $device->employee : $this->shared->fields('employee', $device->email, $generation, $device->employee);
+        $employee = $this->employees->upsertByEmail($device->email, $employeeFields);
+        $model = null;
+        if ($device->model) {
+            $modelFields = $device->model;
+            if ($generation !== null) {
+                $modelFields = ['manufacturer' => $device->model['manufacturer'], 'model_identifier' => $device->model['model_identifier']] + $this->shared->fields('model', $device->model['manufacturer'].'|'.$device->model['model_identifier'], $generation, $device->model);
+            }$model = $this->models->upsertIdentity($modelFields);
+        }
         $existing = $device->preserveModel ? $this->assets->findBySerial($device->serial) : null;
         $fields = $device->asset + [
             'employee_id' => $employee->id,

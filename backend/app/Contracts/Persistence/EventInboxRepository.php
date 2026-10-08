@@ -9,6 +9,8 @@ interface EventInboxRepository
 {
     public function findByEventId(string $eventId): ?EventInbox;
 
+    public function findDeviceVersion(string $provider, string $providerId, int $version): ?EventInbox;
+
     public function recordNotification(string $provider, array $payload): EventInbox;
 
     public function require(int $id): EventInbox;
@@ -21,7 +23,7 @@ interface EventInboxRepository
 
     public function markProcessing(int $id): void;
 
-    public function markSucceeded(int $id): void;
+    public function markSucceeded(int $id, string $outcome = 'applied'): void;
 
     /** Returns false if another worker already completed this notification. */
     public function markFailedAttempt(int $id, string $error): bool;

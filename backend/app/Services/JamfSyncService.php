@@ -7,11 +7,12 @@ use App\Contracts\Persistence\EmployeeRepository;
 use App\Contracts\Persistence\RestoreTaskRepository;
 use App\Contracts\Persistence\SyncRunRepository;
 use App\Contracts\Persistence\TransactionBoundary;
+use App\Data\DeviceEvent;
 use App\Models\SyncRun;
 
 final class JamfSyncService
 {
-    public function __construct(private DeviceProvider $provider, private DeviceReconciler $reconciler, private EmployeeRepository $employees, private RestoreTaskRepository $restorations, private SyncRunRepository $runs, private TransactionBoundary $transactions) {}
+    public function __construct(private DeviceProvider $provider, private DeviceReconciler $reconciler, private EmployeeRepository $employees, private RestoreTaskRepository $restorations, private SyncRunRepository $runs, private TransactionBoundary $transactions, private DeviceEventSimulator $simulator) {}
 
     public function full(): SyncRun
     {
@@ -19,22 +20,22 @@ final class JamfSyncService
             $snapshot = $this->provider->snapshot();
             $counts['warnings'] = $snapshot->warnings;
             $this->reconciler->validateIdentities($snapshot->devices);
+            $simulation = $this->simulator->capture($snapshot, true);
             foreach ($snapshot->devices as $device) {
-                $this->reconciler->apply($device, $counts);
+                $this->reconciler->apply($device, $counts, $simulation['generation']);
             }
             $this->reconciler->removeAbsent($snapshot->devices, $counts);
         });
     }
 
-    public function device(string $id): SyncRun
+    public function applyEvent(DeviceEvent $event): SyncRun
     {
-        return $this->run('event', function (array &$counts) use ($id) {
-            $device = $this->provider->findByProviderId($id);
-            if ($device) {
-                $this->reconciler->validateIdentities([$device]);
-                $this->reconciler->apply($device, $counts);
+        return $this->run('event', function (array &$counts) use ($event) {
+            if ($event->state() === 'removed') {
+                $this->reconciler->removeProviderDevice($event->device->providerId, $counts);
             } else {
-                $this->reconciler->removeProviderDevice($id, $counts);
+                $this->reconciler->validateIdentities([$event->device]);
+                $this->reconciler->apply($event->device, $counts, $event->envelope['producer_generation']);
             }
         });
     }

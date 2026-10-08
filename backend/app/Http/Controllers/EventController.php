@@ -3,9 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Contracts\Persistence\EventInboxRepository;
+use App\Services\DeviceEventSimulator;
 use App\Services\EventReceiver;
 use Illuminate\Http\Request;
-use Illuminate\Validation\Rule;
 
 final class EventController extends Controller
 {
@@ -18,9 +18,14 @@ final class EventController extends Controller
 
     public function store(Request $request, EventReceiver $receiver)
     {
-        $payload = $request->validate(['event_id' => ['required', 'string', 'max:255'], 'provider_device_id' => ['required', 'string', 'max:255'], 'type' => ['required', Rule::in(['device.changed', 'device.removed'])]]);
+        $payload = $request->all();
 
         return response()->json($receiver->accept($payload), 202);
+    }
+
+    public function simulate(DeviceEventSimulator $simulator)
+    {
+        return response()->json($simulator->simulate(), 202);
     }
 
     public function retry(int $event, EventReceiver $receiver)

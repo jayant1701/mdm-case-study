@@ -16,3 +16,4 @@ Route::post('/restorations', [InventoryController::class, 'restore']);
 Route::get('/events', [EventController::class, 'index']);
 Route::post('/events/jamf', [EventController::class, 'store']);
 Route::post('/events/{event}/retry', [EventController::class, 'retry']);
+Route::post('/simulator/jamf', [EventController::class, 'simulate']);

@@ -10,6 +10,6 @@ final class EventInbox extends Model
 
     protected function casts(): array
     {
-        return ['payload' => 'array', 'processed_at' => 'datetime'];
+        return ['payload' => 'array', 'version' => 'integer', 'producer_generation' => 'integer', 'processed_at' => 'datetime'];
     }
 }

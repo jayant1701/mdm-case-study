@@ -3,6 +3,7 @@
 namespace App\Repositories\Eloquent;
 
 use App\Contracts\Persistence\EventInboxRepository;
+use App\Data\DeviceEvent;
 use App\Models\EventInbox;
 use Illuminate\Support\Collection;
 
@@ -13,9 +14,14 @@ final class EloquentEventInboxRepository implements EventInboxRepository
         return EventInbox::where('event_id', $eventId)->first();
     }
 
+    public function findDeviceVersion(string $provider, string $providerId, int $version): ?EventInbox
+    {
+        return EventInbox::where('provider', $provider)->where('provider_device_id', $providerId)->where('version', $version)->first();
+    }
+
     public function recordNotification(string $provider, array $payload): EventInbox
     {
-        return EventInbox::create(['event_id' => $payload['event_id'], 'provider' => $provider, 'provider_device_id' => $payload['provider_device_id'], 'type' => $payload['type'], 'payload' => $payload, 'status' => 'pending']);
+        return EventInbox::create(['event_id' => $payload['event_id'], 'provider' => $provider, 'provider_device_id' => $payload['provider_device_id'], 'type' => $payload['type'], 'payload' => $payload, 'status' => 'pending', 'version' => $payload['version'], 'producer_generation' => $payload['producer_generation'], 'content_hash' => DeviceEvent::parse($payload)->contentHash()]);
     }
 
     public function require(int $id): EventInbox
@@ -44,9 +50,9 @@ final class EloquentEventInboxRepository implements EventInboxRepository
         $record->update(['status' => 'processing', 'attempts' => $record->attempts + 1]);
     }
 
-    public function markSucceeded(int $id): void
+    public function markSucceeded(int $id, string $outcome = 'applied'): void
     {
-        $this->require($id)->update(['status' => 'succeeded', 'processed_at' => now(), 'last_error' => null]);
+        $this->require($id)->update(['status' => 'succeeded', 'outcome' => $outcome, 'processed_at' => now(), 'last_error' => null]);
     }
 
     public function markFailedAttempt(int $id, string $error): bool
