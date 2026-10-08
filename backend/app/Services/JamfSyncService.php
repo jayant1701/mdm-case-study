@@ -72,6 +72,12 @@ final class JamfSyncService
                 if ($event->device->serial !== $task->serial_code) {
                     throw new \RuntimeException('Restoration serial does not match the retained device identity.');
                 }
+                if ($event->state() === 'removed') {
+                    $this->simulator->publish($event->device, 'removed', true);
+                    $this->restorations->resolve($task->id, 'upstream_missing');
+
+                    continue;
+                }
                 if (! $event->device->email) {
                     $this->simulator->publish($event->device, 'unassigned', true);
                     $this->restorations->resolve($task->id, 'upstream_unassigned');

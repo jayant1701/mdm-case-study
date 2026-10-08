@@ -16,12 +16,14 @@ final class MockProviderAdapter implements TargetedDeviceProvider
     public function current(string $providerId): ?DeviceEvent
     {
         $row = $this->devices->find($providerId);
-        if (! $row || $row->state === 'removed') {
+        $checkpoint = $this->states->producerState('jamf', $providerId);
+        if (! $row && ! $checkpoint) {
             return null;
         }
-        $checkpoint = $this->states->producerState('jamf', $providerId);
+        $state = $row?->state ?? 'removed';
+        $device = $row?->device ?? $checkpoint->device;
 
-        return DeviceEvent::parse(['event_id' => 'target-'.$providerId, 'provider_device_id' => $providerId, 'version' => $checkpoint?->version ?? 1, 'producer_generation' => $checkpoint?->producer_generation ?? 1, 'type' => $row->state === 'unassigned' ? 'device.unassigned' : 'device.changed', 'device' => $row->device]);
+        return DeviceEvent::parse(['event_id' => 'target-'.$providerId, 'provider_device_id' => $providerId, 'version' => $checkpoint?->version ?? 1, 'producer_generation' => $checkpoint?->producer_generation ?? 1, 'type' => $state === 'removed' ? 'device.removed' : ($state === 'unassigned' ? 'device.unassigned' : 'device.changed'), 'device' => $device]);
     }
 
     public function snapshot(): DeviceSnapshot
@@ -31,6 +33,6 @@ final class MockProviderAdapter implements TargetedDeviceProvider
             $records[] = $this->current($row->provider_device_id)->device;
         }
 
-return $this->normalizer->canonicalSnapshot($records);
+        return $this->normalizer->canonicalSnapshot($records);
     }
 }

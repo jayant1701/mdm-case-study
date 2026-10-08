@@ -121,6 +121,22 @@ final class ProviderLifecycleTest extends InventoryTestCase
         $this->postJson('/api/sync/provider')->assertOk();
         $this->assertSame(64.0, Asset::where('provider_device_id', '101')->first()->specifications->ram_gb);
         $this->postJson('/api/sync')->assertOk();
-        $this->assertSame(16.0,Asset::where('provider_device_id','101')->first()->specifications->ram_gb);
+        $this->assertSame(16.0, Asset::where('provider_device_id', '101')->first()->specifications->ram_gb);
+    }
+
+    public function test_restore_fences_provider_removal_even_when_its_queue_message_is_pending(): void
+    {
+        Queue::fake();
+        $this->sync();
+        $this->patchJson('/api/provider/jamf/devices/101', ['specifications' => ['ram_gb' => 32]])->assertOk();
+        $old = EventInbox::first();
+        $this->deleteJson('/api/provider/jamf/devices/101')->assertOk();
+        $asset = Asset::where('provider_device_id', '101')->first();
+        $this->deleteJson('/api/assets/'.$asset->id)->assertNoContent();
+        $this->postJson('/api/restorations')->assertOk();
+        $this->assertDatabaseHas('restore_tasks', ['provider_device_id' => '101', 'status' => 'upstream_missing']);
+        app(EventProcessor::class)->process($old->id);
+        $this->assertSame('ignored_stale', $old->fresh()->outcome);
+        $this->assertDatabaseMissing('assets', ['provider_device_id' => '101']);
     }
 }

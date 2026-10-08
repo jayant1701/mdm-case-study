@@ -20,7 +20,7 @@ final class MockProviderService
                 return ['events' => []];
             }
 
-return $this->publisher->capture($this->fixture->snapshot(), false);
+            return $this->publisher->capture($this->fixture->snapshot(), false);
         });
 
         return $this->dispatch($result);
@@ -29,11 +29,11 @@ return $this->publisher->capture($this->fixture->snapshot(), false);
     public function get(string $id): array
     {
         $event = $this->adapter->current($id);
-        if (! $event) {
+        if (! $event || $event->state() === 'removed') {
             abort(404, 'Provider device not found.');
         }
 
-return $event->envelope;
+        return $event->envelope;
     }
 
     public function create(array $state): array
@@ -43,7 +43,7 @@ return $event->envelope;
                 abort(409, 'Provider device already exists.');
             }
 
-return $state;
+            return $state;
         }, false);
     }
 
@@ -54,7 +54,7 @@ return $state;
                 abort(404, 'Provider device not found.');
             }
 
-return array_replace_recursive($existing->device, $changes);
+            return array_replace_recursive($existing->device, $changes);
         }, false);
     }
 
@@ -65,7 +65,7 @@ return array_replace_recursive($existing->device, $changes);
                 abort(404, 'Provider device not found.');
             }
 
-return $existing->device;
+            return $existing->device;
         }, true);
     }
 
@@ -99,6 +99,6 @@ return $existing->device;
             $this->receiver->dispatch($event);
         }
 
-return ['emitted' => count($result['events']), 'event_ids' => array_map(fn ($event) => $event->event_id,$result['events'])];
+        return ['emitted' => count($result['events']), 'event_ids' => array_map(fn ($event) => $event->event_id, $result['events'])];
     }
 }
