@@ -1,12 +1,14 @@
 # MDM inventory case study
 
-This application imports assigned devices and their employees into a local inventory. Laravel provides the backend, React displays the inventory, and MySQL stores both inventory and synchronization state.
+## What the application does
 
-I chose an enhanced mock Jamf provider that emits durable, versioned device events. Routine updates process only affected devices. Full synchronization remains available for initial import and recovery, and local asset restoration uses an individual provider lookup.
+The application keeps a local inventory of assigned devices and employees. Laravel handles imports and synchronization, MySQL stores the data, and React displays it.
 
-The enhancement is a contract I designed for this case study, not a claim that real Jamf supports this exact event payload. The original JSON and reference service remain preserved. The mock provider and inventory application are separate logical modules hosted in one Laravel process and MySQL database for a simple local deployment.
+I chose to enhance the sample Jamf provider so it creates an event when a device is added, changed, unassigned or removed. Laravel processes each event using the device data stored in that event. It does not fetch the whole fleet for every change.
 
-## Start and review
+This enhancement is implemented in the mock provider. The mock provider and inventory application run as separate modules in the same Laravel application and database. A real Jamf integration would need an adapter for its actual API and webhook contract.
+
+## Run the application
 
 With Docker Desktop running:
 
@@ -15,281 +17,243 @@ docker compose up --build
 ```
 
 - UI: http://localhost:5173
-- API: http://localhost:8000/api/assets
-- Startup runs migrations and seeds the provider once from the supplied JSON. The worker imports the seven assigned assets and six employees asynchronously.
-- **Sync Now** reconciles the current provider store.
-- **Import source JSON** explicitly reads the supplied file and refreshes provider and inventory state. It can overwrite changes made through provider APIs.
-- **Activity** shows notification outcomes, source scans, restoration and retry actions.
+- Asset API: http://localhost:8000/api/assets
+- Startup loads the supplied JSON into the provider store once. The worker imports seven assigned assets and six employees.
+- **Sync Now** reads the current provider store and reconciles the local inventory.
+- **Import source JSON** reads the supplied file and updates both stores. This can overwrite provider API changes.
+- **Activity** shows events, results, retries and restoration actions.
 
-Compose starts frontend, backend, MySQL and a Laravel database-queue worker. MySQL uses a persistent named volume. Ports bind to localhost; credentials are for local development. Stop with `docker compose down`. Using `docker compose down -v` also deletes the database volume and its inventory, events and checkpoints.
+Docker runs the frontend, backend, MySQL and queue worker. The MySQL volume retains data across restarts. `docker compose down` stops the application; adding `-v` deletes the database volume.
 
-Original requirements: [assignment](docs/assignment.md). Additional architecture detail: [design](docs/design.md). Schema history: [migrations](backend/database/migrations).
+See the [assignment](docs/assignment.md), [detailed design](docs/design.md) and [database migrations](backend/database/migrations).
 
-## Alternatives and the decision
+## Solutions considered
 
-| Approach considered | Benefit | Trade-off and decision |
+| Solution | Why I considered it | Decision |
 |---|---|---|
-| Full JSON or API snapshot on every sync | Simple; detects arbitrary edits, missing devices and local deletions | Reads and compares the entire fleet. Implemented for the assignment and recovery, not the preferred routine update path |
-| Periodic polling of the same full snapshot | Easy to schedule | Poll frequency trades freshness against repeated work; scheduling does not solve full-read cost |
-| Incremental filtering by reportDate | Could retrieve fewer records | Requires a guarantee that every relevant change advances the field, supported filters, pagination boundaries and deletion discovery. Not assumed from this JSON |
-| Incremental filtering by increasing device ID | Could identify additions under an explicit monotonic-ID contract | Misses edits, removals and restoration of locally deleted old IDs. Rejected as a general change checkpoint |
-| Purchase date as a checkpoint | Available metadata | Describes purchase, not subsequent assignment or hardware changes. Rejected |
-| ID-only notification followed by GET | Small event; fetches current authoritative state | Adds requests and depends on provider availability. A reasonable fallback for external providers with thin webhooks |
-| Event carrying relevant complete device state | No follow-up fetch for routine updates; independent queued processing | Needs reliable event persistence, payload validation, ordering and replay handling. Selected |
-| Partial-change events | Smaller messages | Missing vs null, merging and ordering are more complex. Provider PATCH accepts partial input, but emitted messages carry complete normalized state |
-| Batch reads or version/hash manifests | Reduce round trips and reconciliation payloads | Useful future provider capabilities; batching does not itself provide reliable change detection |
-| Kafka or managed queue with separate/serverless workers | Independent scaling, operational isolation and replay options | Adds infrastructure beyond the local assignment. The current demonstration uses a durable database queue |
-| gRPC between services | Typed internal communication | Does not provide event durability or identify changes. HTTP APIs and asynchronous jobs suffice here |
+| Full synchronization | Simple; finds additions, edits and removals | Keep for initial import and recovery. Reading every device for every update repeats work |
+| Scheduled full polling | Simple to run periodically | Same full-read cost; shorter intervals increase that cost |
+| Filter by reportDate | Could fetch only changed records | The sample does not guarantee that every relevant change updates this date, or explain how to find removals |
+| Filter by increasing device ID | Could find new records | Misses edits and removals of existing records |
+| Filter by purchase date | Field is present in the response | Purchase date does not track later changes |
+| ID-only event, then GET that device | Small notification; individual lookup | Valid alternative, but adds a provider request and requires the provider to be available |
+| Event containing current device data | Worker can process it without a provider request | Chosen. Requires persistent events, duplicate handling and ordering |
+| Event containing only changed fields | Smaller payload | More complex merging and ordering. PATCH accepts partial changes, but emitted events contain complete relevant device data |
+| Batch requests or version/hash lists | Reduce requests or reconciliation traffic | Possible future enhancement; still needs a way to detect changes |
+| Kafka or a managed queue with separate workers | Allows independent deployment and scaling | Not needed for this local demonstration. Use the database queue |
+| gRPC | Typed communication between services | Does not solve persistence or change detection. Use HTTP APIs and queued jobs |
 
-Events do not replace reconciliation. Missed changes, operational errors or local deletion still require recovery. Reconciliation can later be partitioned, scheduled and assisted by provider version manifests. No automatic periodic schedule is implemented here.
+Full reconciliation remains necessary for recovery. It is manual in this implementation.
 
-## Back of the envelope capacity planning
+## Back-of-the-envelope calculations
 
-These are estimates for deciding the architecture, not measured production benchmarks.
+These are planning assumptions, not performance measurements:
 
-### Assumptions
+- 100 customers, each with 10,000 to 1,000,000 employees.
+- One device per employee: 1 million to 100 million devices.
+- 10% annual additions or departures, plus 1% device replacements.
+- Count one event per affected device: 11% of the fleet per year. If replacement creates a removal and an addition, use 12%.
+- Use 2 KB for a device event and 250 bytes for an ID-only notification.
+- Use decimal GB and TB.
 
-- 100 customers with 10,000 to 1,000,000 employees each.
-- One managed device per employee: **1 million to 100 million devices** in total.
-- Annual organizational additions **or** departures of 10%, plus device replacement affecting 1% of the fleet.
-- Initially count one event per affected device: 11% of fleet annually. A replacement represented as removal plus addition increases this simplified estimate to 12%.
-- This excludes normal assignment edits, software/inventory reporting, hardware changes, retries and bursts. Net headcount growth alone does not measure total device activity.
-- Compact supplied device records average approximately **660 bytes** across seven records. For planning use **2,000 bytes** for a complete relevant-state event including an envelope, versus **250 bytes** for an ID-only notification.
-- Use decimal GB/TB. Retention illustrations assume uniform arrivals, 30 days and three retained copies; this is not the current deployment's replication configuration.
+These assumptions exclude assignment edits, hardware changes, retries and bursts. Net employee growth does not tell us the total number of device changes.
 
-### Fleet and event traffic
+`annual events = total devices × 11%`
 
-`annual events = fleet × 0.11`
-
-`annual raw event bytes = annual events × bytes per event`
-
-| Total devices | Annual events | Average events/second | Complete-state traffic/year | ID-only traffic/year |
+| Total devices | Events/year | Average events/second | Device-event traffic/year | ID-only traffic/year |
 |---|---:|---:|---:|---:|
 | 1 million | 110,000 | 0.0035 | 0.22 GB | 0.0275 GB |
 | 100 million | 11 million | 0.35 | 22 GB | 2.75 GB |
 
-Those averages are small; capacity must account for initial import and concentrated updates. One initial full response at 2 KB/device is approximately **2 GB to 200 GB**, excluding protocol and database overhead. Repeating that daily would transfer approximately **730 GB to 73 TB/year** even when the inventory is unchanged.
+At 2 KB per device, one full import is 2 GB to 200 GB. A daily full import transfers about 730 GB to 73 TB per year, including unchanged devices.
 
-If each device instead emits one event per day, complete-state events also generate **730 GB to 73 TB/year**, averaging roughly **12 to 1,157 events/second**. Events are efficient only when they represent meaningful changes rather than routine heartbeat noise. This is why timestamp-only updates do not emit notifications.
+Complete device events add 0.1925 GB to 19.25 GB per year over ID-only notifications. With 30 days of retention and three copies, the additional stored payload is about 0.047 GB to 4.75 GB:
 
-The fleet size alone does not justify a specific broker. Actual change rate, burst size, freshness needs, availability requirements and retention determine production capacity.
+`extra storage = annual events × (2000 − 250) × 30/365 × 3`
 
-### Redundancy and retained storage
+Three copies are an estimate, not the current deployment configuration. These figures exclude database indexes, backups and row overhead. ID-only events also require GET responses, so their notification size is not their total network cost.
 
-At the simplified 11% annual change rate, complete payloads add about **0.1925 GB to 19.25 GB/year** over ID-only notifications. With 30-day retention and three copies, the extra retained raw payload is approximately **0.047 GB to 4.75 GB**:
+If every device sends an event daily, traffic rises to 730 GB to 73 TB per year, averaging 12 to 1,157 events per second. Retaining those payloads for 30 days with three copies takes about 180 GB to 18 TB. This is why routine contact timestamps must not create events.
 
-`extra retained bytes = annual events × (2000 − 250) × 30/365 × 3`
+Shared model data also reduces repetition. For example, 80 bytes of model description copied into 1 million to 100 million assets uses 80 MB to 8 GB. Storing 5,000 model descriptions once uses about 0.4 MB, plus asset foreign keys. Device-specific specifications still belong to each asset.
 
-Under daily-per-device events, the complete payload alone needs roughly **180 GB to 18 TB** for 30 days and three copies. These figures exclude indexes, row overhead, backups, failures and compression. Smaller notifications also cause device GET responses, so notification size alone does not measure total network cost.
+## Why I chose device events
 
-Our implementation stores device state in the provider store, producer baseline and consumer checkpoint, as well as retained event payloads. This is deliberate recovery/ordering state, but it needs retention and compaction policies at scale. Successful queue jobs are removed; the application event inbox currently has no automatic retention cleanup. It would otherwise grow indefinitely.
+Device events avoid routine full-fleet reads and an extra GET for each change. Under the assumed change rate, the additional payload storage is small compared with daily full imports. A worker can also finish processing stored events while the provider is unavailable.
 
-Model normalization avoids unnecessary description duplication. As an illustration, assume 80 bytes of shared model description and 5,000 distinct models: copying descriptions into every asset costs about **80 MB to 8 GB** for this fleet range, versus about **0.4 MB** of shared descriptions plus foreign keys. Actual MySQL storage depends on field lengths and indexes. Mutable RAM, storage and processor configuration remain per asset; model identity does not guarantee identical hardware.
+The trade-off is more work to persist events and handle duplicates, failures and ordering. Those protections are implemented and tested.
 
-### Why I recommend complete-state events
+Individual GET is used to restore a locally deleted asset. Full synchronization is used for initial import and recovery. If a real provider only supplies ID notifications, its adapter would fetch the affected device instead.
 
-The selected approach avoids routine full-fleet retrieval and follow-up GETs for each update. The payload cost is modest under the low-change estimate, and the consumer can process queued updates while provider lookup is unavailable. The price is additional persistence and ordering complexity, which is explicit and tested. Targeted GET is reserved for local restoration; full reconciliation is a recovery operation.
+## Design
 
-For a real Jamf integration, the adapter must accommodate the actual webhook/API contract. If only IDs are delivered, an ID-notification plus individual/batch lookup remains a valid alternative. I would not invent complete payloads or provider sequence guarantees.
-
-## Architecture and design patterns
+The normal update flow is:
 
 ```text
-Mock provider GET / POST / PATCH / DELETE
-    → Provider repository
-    → Atomic provider state + durable notification
-    → Queue dispatch after commit
-    → Worker loads stored device payload
-    → Sync/reconciliation services
-    → Inventory repository interfaces
-    → Eloquent implementations
-    → MySQL inventory
-    → Laravel HTTP APIs
-    → React
-
-Local asset deletion
-    → RestoreTask with provider ID and serial
-    → Targeted provider adapter lookup
-    → Checkpoint-fenced restoration
+Provider POST / PATCH / DELETE
+  → Save provider data and event in one database transaction
+  → Queue a job after commit
+  → Worker reads the stored event
+  → Apply inventory changes and record the processed version
+  → React reads the inventory through Laravel APIs
 ```
 
-- **Adapter:** `DeviceProvider` reads/maps the fixture; `TargetedDeviceProvider` maps indexed provider records. Provider-specific data becomes a common device representation.
-- **Repository:** services/controllers depend on persistence contracts. Eloquent implementations own queries and writes; the asset/specifications aggregate persists together.
-- **Dependency injection:** Laravel binds contracts to implementations, allowing meaningful substitutes in tests.
-- **Application services:** reconciliation determines what changes; repositories determine how it is stored.
-- **Durable inbox/outbox:** producer changes and notification rows commit together; jobs reference those durable rows.
-- **Transactions and provider lock:** a permanent transaction-scoped row lock serializes provider changes, sync, event processing and local deletion. There is no expiring lock TTL.
-- **Idempotent consumer:** duplicate IDs and stale versions do not repeat inventory changes.
+The code uses:
 
-This is SOLID-aligned rather than completely framework-independent. Contracts still return some Eloquent models and Laravel collections/paginators. The demonstration shares one database/process, so source state and inbox can commit atomically. Separate deployments would require a producer-owned outbox and retrying delivery to a consumer-owned inbox; an HTTP POST alone is not atomic with the producer database.
+- **Provider adapters** to map provider data into a common device format.
+- **Repository interfaces** for database access. Eloquent implementations contain the queries and writes; migrations are in backend/database/migrations.
+- **Application services** to decide how imports, events, deletion and restoration change the inventory.
+- **Dependency injection** to bind interfaces to implementations and substitute them in tests.
+- **Transactions** to save related changes together.
+- **Event IDs and versions** to handle repeated or older messages.
 
-The provider-wide lock favors simple correctness in this local setup. It serializes processing and is not a proven strategy for the upper fleet range. Production could partition by tenant/device while coordinating shared metadata and recovery. Multi-tenant identity scoping is not implemented.
+The services still use some Eloquent models and Laravel collections. The repository layer separates database queries, but the application is not fully independent of Laravel.
 
-## Event persistence risks and mitigation
+A database row lock serializes provider operations in this demonstration. Large deployments would need tenant/device partitioning and load testing. The capacity calculations do not prove that this implementation supports 100 million devices.
 
-| Failure or risk | Current mitigation | Remaining production work |
-|---|---|---|
-| Provider writes succeed but notification storage fails | Provider state and event row share one transaction; both roll back | Separate producer outbox if services/databases split |
-| Crash after commit but before enqueue | Event remains pending; worker runs `events:recover` to redispatch | Monitor pending age and dispatch backlog |
-| Worker fails mid-update | Inventory, checkpoint and success acknowledgment roll back together | Monitor retries and diagnose persistent failures |
-| Duplicate delivery | Unique event ID/device-version and canonical content checks | Keep deduplication state for the chosen replay window |
-| Older event arrives late | Per-device versions/generations; retained tombstones | Define genuine provider ordering/replay guarantees |
-| Different devices update shared employee/model metadata out of order | Shared metadata generation guards | Partitioning and source-owned shared identities at scale |
-| Old queued update arrives after restoration/full sync | Restoration and reconciliation advance checkpoint fences atomically | Recovery run observability |
-| Container restarts | MySQL persistent volume retains events/state | Backups, replication, restore drills and infrastructure availability |
-| Database volume is deleted or lost | No guarantee after volume loss | Durable backups and disaster recovery |
-| Unbounded event/state growth | Explicitly recognized; cleanup not scheduled | Retention, archival, failed-event policy and safe watermark compaction |
+## Event persistence and failure handling
 
-HTTP 202 means the event was durably accepted, not that inventory processing finished. Dispatch failures leave pending inbox rows. The worker uses the database queue with up to three queue attempts; failed events remain visible and can be explicitly retried.
+The main risk is updating a device and losing its notification before the inventory receives it.
 
-Transport is **at least once**, not exactly once. Transactions and idempotent processing make repeated delivery safe. Hard termination can leave historical SyncRun rows marked in progress; stale-run cleanup is future work.
+| Risk | Implemented protection |
+|---|---|
+| Provider data saves but the event does not | Save both in one transaction; failure rolls back both |
+| Application stops before the job is queued | Event remains pending in MySQL; the worker recovers pending events |
+| Worker fails during an update | Inventory changes, processed version and completion status roll back together |
+| Event is delivered twice | Event ID and device version identify duplicates; conflicting content is rejected |
+| Older event arrives later | Stored versions prevent it from overwriting newer data |
+| Events update shared employee/model data out of order | Shared-data ordering checks prevent older values from replacing newer ones |
+| Old event arrives after restoration or full sync | Recovery records the current source version so older messages are ignored |
+| Container restarts | Persistent MySQL volume retains events and processing state |
+
+Delivery can happen more than once. Processing is designed to make repeated delivery safe. HTTP 202 means the event was saved, not that processing has finished. Failed events remain available for retry.
+
+Because both modules share a database, provider data and events can be saved together. With separate services, the provider would need its own event outbox and retry delivery until the receiving service saves the event.
+
+Backups, automatic event retention and monitoring remain production work. Deleting or losing the database volume loses its events. Completed queue jobs are removed, but retained event records currently have no automatic cleanup. An interrupted sync can also leave its history marked in progress.
 
 ## Data models
 
-| Entity | Identity and relationships | Purpose |
-|---|---|---|
-| Employee | Internal ID; unique normalized email; nullable name/phone; deleted_at | One employee can have many assets. Deletion retains ID/email/time, clears name/phone, excludes active lists and preserves asset links |
-| Asset | Internal ID; unique serial; provider + provider_device_id; employee/model foreign keys | A physical device with one current employee, device name, UDID and purchasing/report metadata |
-| DeviceModel | Unique manufacturer + model_identifier; model name | Shared description, not a guarantee of immutable specifications |
-| AssetAttributes | Unique asset_id; cascades with asset deletion | Per-asset RAM, storage, processor, cores and battery condition |
-| RestoreTask | Provider + serial; retained provider_device_id; status/attempts/deleted_at | Independent local asset deletion record for targeted restoration |
-| SyncRun | Provider/mode/status/start/end/counters/error | Execution history, not a provider change cursor |
-| MockProviderDevice | Unique provider/device ID and provider/serial; normalized state | Current source data, logically separate from local assets |
-| EventInbox | Unique event_id and provider/device/version; payload/status/outcome/attempts/error | Durable notification, local outbox/inbox and retry diagnostics |
-| SimulatedProviderDevice | Provider/device ID; version/generation/fingerprint/state/device | Producer baseline for semantic differences |
-| DeviceEventState | Provider/device ID; applied version/generation/state/device | Consumer checkpoint; survives asset deletion |
-| SharedEventState | Provider/kind/identity; generation/fingerprint | Prevents shared employee/model metadata regression |
-| SimulatorGeneration | Provider + counter | Producer-wide ordering generation |
-| SyncLock | One permanent row per provider | Transaction-scoped serialization |
-| Jobs / failed jobs | Laravel queue tables | Delivery attempts; separate from durable notification content |
+| Entity | What it stores |
+|---|---|
+| Employee | Internal ID, unique email, name, phone and deletion time |
+| Asset | Unique serial, provider, provider device ID, employee/model references, device name, UDID and purchase/report dates |
+| DeviceModel | Shared manufacturer, model identifier and model name |
+| AssetAttributes | Per-asset RAM, storage, processor, core count and battery condition |
+| RestoreTask | Deleted asset's provider ID and serial, restoration status and attempts |
+| SyncRun | Sync start/end times, status, counts and error |
+| MockProviderDevice | Current device data held by the mock provider |
+| EventInbox | Stored event payload, status, outcome, attempts and error |
+| SimulatedProviderDevice | Previous producer state used to detect meaningful changes |
+| DeviceEventState | Last processed device version and state; retained after asset deletion |
+| SharedEventState | Ordering information for shared employee/model updates |
+| SimulatorGeneration | Provider-wide sequence for ordering changes |
+| SyncLock | Database row used to coordinate provider operations |
+| Jobs / failed jobs | Laravel queue records |
 
-No EmployeeAssets join table is needed for one current assignee per asset. Alex's two assets are represented by two asset rows referencing the same employee. Assignment history would justify a separate table later.
+One employee can have several assets. Each asset has one current employee, so a separate EmployeeAssets table is not needed. The sample employee with two devices has two asset rows referencing the same employee.
 
-Serial identifies the asset for this assignment. Provider ID identifies the upstream record for lookup and events; it is not a change sequence. Internally generated numeric keys simplify relationships while email remains the employee business identity.
+Email is the employee business identifier; an internal ID links the tables. Serial identifies the physical asset. Provider device ID identifies the upstream record for lookups and events.
 
-Local asset deletion does not delete its employee. Local employee deletion does not delete assets. Source unassignment/removal does remove the local asset because the application imports assigned source devices.
+DeviceModel is unique by manufacturer and model identifier. AssetAttributes remains separate because devices of the same model can have different RAM, storage or other specifications. Model identifier does not imply immutable hardware.
 
-## Notification contract and update semantics
+## Change detection
 
-A notification envelope describes delivery and ordering; its device object carries complete normalized relevant state:
+Events are `device.added`, `device.changed`, `device.unassigned` or `device.removed`. Each contains an event ID, provider device ID, device version, provider-wide sequence and current normalized device data. Removal events currently retain the last known device data.
 
-```json
-{
-  "event_id": "unique-message-id",
-  "provider_device_id": "101",
-  "version": 2,
-  "producer_generation": 2,
-  "type": "device.changed",
-  "device": {
-    "provider_device_id": "101",
-    "serial_code": "C02DL0XYZQ6N",
-    "email": "alex.smith@company.test",
-    "employee": {"name": "Alex Smith", "phone": "+491234567890"},
-    "model": {"manufacturer": "Apple", "model_identifier": "MacBookPro18,3", "model_name": "MacBook Pro (14-inch, M1 Pro, 2021)"},
-    "asset": {"device_name": "Alex’s MacBook Pro", "udid": "6E662F59-DF86-41CE-BD4C-4AD8CE32369C", "purchased": true, "purchase_date": "2022-06-15", "report_date": "2025-11-20 09:15:00"},
-    "specifications": {"ram_gb": 32, "storage_gb": null, "processor_type": "Apple M1 Pro", "core_count": 10, "battery_capacity_percent": 91}
-  }
-}
-```
+PATCH accepts partial input. Omitted fields keep their values; explicit null clears supported nullable fields. The resulting event contains complete relevant state.
 
-Types: `device.added`, `device.changed`, `device.unassigned`, `device.removed`. Unassigned has null email. This implementation's removal message retains last-known complete state, including identity, to validate deletion; a smaller identity-only removal schema is a future refinement.
+- `general.lastContactTime` does not trigger events.
+- Report date is stored as metadata but does not trigger events by itself.
+- A RAM or assignment change triggers an event even if report date stays unchanged.
+- Purchase date, JSON order and increasing IDs are not sync checkpoints.
+- Reusing an event ID or device version with different content returns HTTP 409.
 
-Versions increase per device; producer_generation orders batches and shared metadata. They come from simulator state, not report timestamps. Identical replays are safe. Reusing an event ID or device version for different canonical content returns 409. Older versions/generations are ignored; conflicting applied versions fail.
-
-PATCH accepts partial normalized state. Omitted fields preserve prior producer values; explicit null clears supported nullable fields. Presence-aware normalization applies the same rule to fixture import before creating complete events. Model descriptions are shared while actual configurations stay per asset.
-
-`general.lastContactTime` is ignored for event detection. Report date is retained as metadata but excluded from semantic fingerprints. A report-date-only change emits no event; RAM or assignment edits emit even when the date stays unchanged. Purchase date, array order and increasing IDs are not used as change checkpoints.
+The provider store, previous producer state and processed consumer state contain some repeated device data. Each has a role in recovery and ordering. Retention and compaction would be needed at scale.
 
 ## API endpoints
 
-Provider CRUD below is a developer simulator API. It does not add manual create/edit to the local inventory UI.
+Provider endpoints change the simulated source. Inventory endpoints manage local records.
 
-| Method | Endpoint | Behavior |
+| Method | Endpoint | Purpose |
 |---|---|---|
-| GET | `/api/provider/jamf/devices/{providerId}` | Indexed individual lookup; returns normalized versioned envelope; removed/unknown devices return 404 |
-| POST | `/api/provider/jamf/devices` | Create/reintroduce provider device using a complete device object; returns 201 and notification summary |
-| PATCH | `/api/provider/jamf/devices/{providerId}` | Partial normalized state; emits only a meaningful change; serial cannot change |
-| DELETE | `/api/provider/jamf/devices/{providerId}` | Retain provider removal state and queue removal |
-| POST | `/api/provider/jamf/seed` | Initialize/backfill once without resetting existing provider state |
-| GET | `/api/assets` | Paginated local assets with employee/model/specifications |
-| GET | `/api/assets/{id}` | Local asset details |
-| GET | `/api/employees` | Active employees with assigned asset links |
-| DELETE | `/api/assets/{id}` | Local asset deletion plus restoration identity; employee remains |
-| DELETE | `/api/employees/{id}` | Retain identity tombstone and linked assets |
-| POST | `/api/sync/provider` | Sync Now: reconcile complete current provider store |
-| POST | `/api/sync` | Explicit full JSON import; refresh source and local inventory |
-| POST | `/api/simulator/jamf` | Read mounted fixture differences, persist source/baseline/events and queue changes |
-| POST | `/api/restorations` | Process pending local asset restoration tasks via individual lookups |
-| GET | `/api/sync-runs` | Latest execution results |
-| POST | `/api/events/jamf` | Accept complete versioned notification; returns 202 after persistence |
-| GET | `/api/events` | Inbox status, ordering and processing outcome |
-| POST | `/api/events/{id}/retry` | Requeue failed notification |
+| GET | /api/provider/jamf/devices/{providerId} | Get one provider device; removed/unknown IDs return 404 |
+| POST | /api/provider/jamf/devices | Create a device from complete normalized device data |
+| PATCH | /api/provider/jamf/devices/{providerId} | Update supplied fields; serial cannot change |
+| DELETE | /api/provider/jamf/devices/{providerId} | Remove the provider device and create an event |
+| POST | /api/provider/jamf/seed | Initialize the provider store without resetting existing data |
+| GET | /api/assets | List local assets with pagination |
+| GET | /api/assets/{id} | Get asset details |
+| GET | /api/employees | List active employees and their assets |
+| DELETE | /api/assets/{id} | Delete a local asset and retain restoration details |
+| DELETE | /api/employees/{id} | Mark an employee deleted and retain linked assets |
+| POST | /api/sync/provider | Reconcile inventory with the current provider store |
+| POST | /api/sync | Import the supplied JSON into provider and inventory stores |
+| POST | /api/simulator/jamf | Scan JSON differences and queue events |
+| POST | /api/restorations | Restore eligible locally deleted assets using individual lookups |
+| GET | /api/sync-runs | Get recent sync results |
+| POST | /api/events/jamf | Save a device event for processing |
+| GET | /api/events | Get event processing results |
+| POST | /api/events/{id}/retry | Retry a failed event |
 
-The restoration adapter performs indexed lookup in the mock provider module; it does not loop back over HTTP to its own deployment. A separately hosted provider would use an HTTP adapter behind the same boundary. Internal lookup can return a removal tombstone even when public GET returns 404, so restoration fences old updates.
+The restoration adapter reads the indexed mock provider store directly. A separately hosted provider would use an HTTP adapter. The local UI does not provide manual asset creation or editing.
 
 ## Workflows
 
-### Provider changes
+### Add or update a provider device
 
-1. POST or PATCH writes provider data.
-2. Relevant-state comparison decides whether to emit. The provider row and event commit together.
-3. After commit, a job references the stored inbox ID.
-4. Worker validates payload and ordering, reconciles inventory through repositories, advances checkpoints and marks success atomically.
-5. Refresh inventory/activity to see the result.
+1. Call provider POST or PATCH.
+2. Save the changed provider data and event together.
+3. Queue processing after commit.
+4. Worker applies the stored device data and records its version.
+5. Refresh the UI to see the result.
 
-Example individual GET and RAM update:
+For example, update RAM:
 
 ```sh
-curl -H "Accept: application/json" http://localhost:8000/api/provider/jamf/devices/101
 curl -X PATCH -H "Accept: application/json" -H "Content-Type: application/json" -d '{"specifications":{"ram_gb":64}}' http://localhost:8000/api/provider/jamf/devices/101
 ```
 
-For POST, save the example envelope's `device` object as `new-device.json`, with a new provider ID and serial, then:
+The worker uses the event payload. It does not read the JSON file or fetch the device again.
 
-```sh
-curl -X POST -H "Accept: application/json" -H "Content-Type: application/json" --data-binary @new-device.json http://localhost:8000/api/provider/jamf/devices
-```
+### Delete and restore a local asset
 
-DELETE uses the provider URL with `-X DELETE`; it changes source truth and emits a removal. Local deletion uses the distinct `/api/assets/{localId}` endpoint.
+1. Save its provider ID and serial in RestoreTask, then delete the local asset and attributes.
+2. Keep the employee and provider device.
+3. Run restoration and look up only that provider ID.
+4. Restore it if it still exists and is assigned.
+5. Record the current source version so older queued updates cannot overwrite the result.
 
-### Local asset deletion and restoration
+Removed, unassigned or unknown provider devices are not restored. An unchanged file scan does not restore local deletions. Restoration is explicit; full reconciliation also restores eligible assigned devices.
 
-1. Retain provider ID and serial in RestoreTask, then delete the local asset/specifications atomically.
-2. Provider and employee remain untouched.
-3. Invoke restoration; lookup only that provider ID.
-4. Existing assigned device is recreated; unassigned/removed/unknown source records are not imported.
-5. Advance the checkpoint for current source state, including retained removal state, so older queued messages cannot undo recovery.
+### Delete an employee
 
-Unchanged scans do not automatically restore local deletion. Restoration is explicit; a complete reconciliation also recovers assigned records. Restoration records retain outcomes and attempts; synchronization results expose execution status and counters. Automatic repeated restoration scheduling is not implemented.
+Retain the employee ID, email and deletion time, and clear name/phone. Keep the assets and display **Deleted user (email)**. Hide that employee from the active employee list.
 
-### Local employee deletion
+A later source reconciliation or relevant event can reactivate the same employee.
 
-1. Retain employee ID/email and deletion time; clear name/phone.
-2. Keep every linked asset and display **Deleted user (email)** in asset lists/details.
-3. Exclude the employee from the active Employees tab.
-4. Source reconciliation or a relevant source event reactivates the same employee and assignments.
+### Remove or unassign a provider device
 
-### Direct JSON import and simulated bulk changes
+Create a removal or unassignment event. Processing removes the local asset because this application imports assigned devices. The employee is not deleted.
 
-The backend reads `files/api-mock-response.json` directly, while React only uses HTTP APIs.
+### Import or scan the JSON
 
-- **Import source JSON** applies the complete fixture and fences queued older messages.
-- **Scan source and queue changes** compares fixture data with the durable producer baseline, emitting only semantic differences.
-- An initial scan without baseline emits seven additions; a scan after full import emits zero when unchanged.
-- Editing the file alone does not update indexed provider GET. Import or scan first.
-- An event already queued retains its original payload even if the file changes later.
+The supplied JSON represents provider output.
 
-Absence reconciliation requires a complete authoritative snapshot. The fixture validates totalCount against results; this is a local contract assumption, not proof that an arbitrary external API page represents the entire fleet. A real paginated adapter must fetch/validate every page before absence cleanup. Never apply full-snapshot removal logic to a changes-only response.
+- **Import source JSON** reads the full file and updates provider and inventory state.
+- **Scan source and queue changes** compares it with saved producer state and emits meaningful differences.
+- Editing the file alone does not update provider GET responses; import or scan first.
+- Queued events keep their saved payload even if the file later changes.
+
+Removing assets because they are missing from a response requires a complete snapshot. The fixture checks totalCount against results. A real paginated adapter must read every page before treating absence as removal. A changes-only response cannot be used for this cleanup.
 
 ## Verification
 
-**34 backend tests / 230 assertions passed**, plus React production build. Tests use isolated temporary fixtures and SQLite. They cover provider lifecycle, atomic event persistence/rollback, source-free worker/retry, timestamp suppression, stale/duplicate conflicts, shared metadata ordering, missing vs null semantics, targeted restoration, removed-provider fencing, employee tombstones and required full import.
+Passed: 34 backend tests with 230 assertions, and the React production build.
 
-Docker/MySQL checks verified migrations and upgrade backfill; individual provider GET; POST creating an asset through the worker; meaningful PATCH emitting one event; timestamp-only PATCH emitting zero; DELETE removing the asset; restoration keeping RAM64 while older queued updates were ignored; employee deletion retaining assets/email and reconciliation reactivating that identity. The demo was returned to seven assets, six employees and original RAM16.
+Tests cover provider changes, event persistence, retries, duplicate/stale messages, timestamp suppression, partial fields, restoration and employee deletion. Docker/MySQL checks also verified provider CRUD, queued processing, restoration with older pending events and employee reactivation.
 
-Final browser automation could not restart due to a local tool initialization failure. UI source and production build were checked; the final deleted-user flow was verified through API and tests, not claimed as a final browser run.
-
-Run backend tests:
+Final UI changes were checked through source, build, APIs and tests. Final browser automation could not run because its local tool failed to initialize.
 
 ```sh
 cd backend
@@ -297,10 +261,16 @@ composer install
 php vendor/phpunit/phpunit/phpunit
 ```
 
-PHP 8.3+ and required extensions are needed for host tests. Run frontend verification with `cd frontend && npm ci && npm run build`. Format with Laravel Pint and Prettier.
+Host tests require PHP 8.3+ and its required extensions. Frontend check:
 
-## Boundaries and next steps
+```sh
+cd frontend
+npm ci
+npm run build
+```
 
-Production work includes real provider authentication and contract validation, tenant identity scoping, partitioned processing, scheduled reconciliation, event retention/archival, backups and observability. Fleet estimates above do not establish benchmarked capacity.
+## Production work
 
-No real Jamf service was changed. No Kafka, serverless deployment, gRPC or real webhook integration is required by this local demonstration. Legacy ID-only pending notifications fail validation rather than triggering hidden provider reads. GitHub publication and reviewer access remain submission steps.
+Before using this with real customers, add provider authentication, validate the real API/event contract, scope identities by tenant, benchmark processing, schedule reconciliation, define retention, add monitoring and test database backups.
+
+The current implementation is a local case study with an enhanced mock provider, a persistent database queue and manual recovery actions.
