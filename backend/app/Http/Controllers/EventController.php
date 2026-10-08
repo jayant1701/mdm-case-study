@@ -10,6 +10,16 @@ use Illuminate\Http\Request;
 
 final class EventController extends Controller
 {
+    public function providerOutbox(RemoteProviderGateway $provider)
+    {
+        return $provider->outbox();
+    }
+
+    public function retryProviderOutbox(RemoteProviderGateway $provider)
+    {
+        return $provider->retryOutbox();
+    }
+
     public function __construct(private EventInboxRepository $events) {}
 
     public function index()

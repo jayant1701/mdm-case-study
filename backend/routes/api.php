@@ -21,6 +21,8 @@ Route::get('/sync-runs', [InventoryController::class, 'runs']);
 Route::post('/restorations', [InventoryController::class, 'restore']);
 
 Route::get('/events', [EventController::class, 'index']);
+Route::get('/provider-outbox', [EventController::class, 'providerOutbox']);
+Route::post('/provider-outbox/retry', [EventController::class, 'retryProviderOutbox']);
 Route::post('/events/jamf', [EventController::class, 'store']);
 Route::post('/events/{event}/retry', [EventController::class, 'retry']);
 Route::post('/simulator/jamf', [EventController::class, 'simulate']);

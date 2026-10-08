@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Contracts\EventPublisher;
+use App\Contracts\Persistence\ProviderOutboxRepository;
+use App\Http\Controllers\IndependentProviderController;
 use App\Models\ProducerOutbox;
 use App\Services\IndependentProviderService;
 use App\Services\ProducerOutboxPublisher;
@@ -13,6 +15,37 @@ use Tests\TestCase;
 
 class IndependentProviderTest extends TestCase
 {
+    public function test_outbox_activity_and_manual_retry_report_delivery_separately(): void
+    {
+        $this->service()->import($this->source);
+        $outbox = app(ProviderOutboxRepository::class);
+        $controller = app(IndependentProviderController::class);
+        $activity = $controller->outbox($outbox);
+        $this->assertSame(7, $activity['pending']);
+        $this->assertCount(7, $activity['data']);
+        $this->assertArrayHasKey('device_name', $activity['data'][0]);
+        $this->app->instance(EventPublisher::class, new class implements EventPublisher
+        {
+            public function publish(array $payload): void
+            {
+                throw new \RuntimeException('broker unavailable');
+            }
+        });
+        $failed = $controller->retryOutbox(app(ProducerOutboxPublisher::class), $outbox);
+        $this->assertSame(1, $failed['failed']);
+        $this->assertSame(7, $failed['pending']);
+        $this->assertStringContainsString('broker unavailable', $controller->outbox($outbox)['data'][6]['last_error']);
+        $this->app->instance(EventPublisher::class, new class implements EventPublisher
+        {
+            public function publish(array $payload): void {}
+        });
+        $delivered = $controller->retryOutbox(app(ProducerOutboxPublisher::class), $outbox);
+        $this->assertSame(7, $delivered['published']);
+        $this->assertSame(0, $delivered['pending']);
+        $again = $controller->retryOutbox(app(ProducerOutboxPublisher::class), $outbox);
+        $this->assertSame(0, $again['published']);
+    }
+
     private array $source;
 
     protected function setUp(): void
@@ -130,6 +163,6 @@ class IndependentProviderTest extends TestCase
         $this->assertSame(16.0, (float) $this->service()->current('101')['device']['specifications']['ram_gb']);
         $result = $this->service()->patch('101', ['specifications' => ['ram_gb' => 32]]);
         $this->assertSame(1, $result['emitted']);
-        $this->assertSame(32.0,(float) $result['device']['device']['specifications']['ram_gb']);
+        $this->assertSame(32.0, (float) $result['device']['device']['specifications']['ram_gb']);
     }
 }

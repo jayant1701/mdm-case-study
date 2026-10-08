@@ -55,6 +55,16 @@ final class HttpMockProviderAdapter implements RemoteProviderGateway
         return $this->request('post', '/scan');
     }
 
+    public function outbox(): array
+    {
+        return Http::acceptJson()->timeout(5)->get($this->url('/outbox'))->throw()->json();
+    }
+
+    public function retryOutbox(): array
+    {
+        return Http::acceptJson()->timeout(45)->post($this->url('/outbox/retry'))->throw()->json();
+    }
+
     public function seed(): array
     {
         return $this->request('post', '/seed');

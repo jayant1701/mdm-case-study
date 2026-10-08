@@ -9,4 +9,8 @@ interface RemoteProviderGateway extends TargetedDeviceProvider
     public function import(array $response): array;
 
     public function scan(): array;
+
+    public function outbox(): array;
+
+    public function retryOutbox(): array;
 }

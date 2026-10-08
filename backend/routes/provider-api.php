@@ -4,6 +4,8 @@ use App\Http\Controllers\IndependentProviderController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('provider')->group(function () {
+    Route::get('/outbox', [IndependentProviderController::class, 'outbox']);
+    Route::post('/outbox/retry', [IndependentProviderController::class, 'retryOutbox']);
     Route::get('/snapshot', [IndependentProviderController::class, 'snapshot']);
     Route::get('/devices/{device}', [IndependentProviderController::class, 'current']);
     Route::post('/import', [IndependentProviderController::class, 'import']);

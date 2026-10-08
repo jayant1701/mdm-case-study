@@ -11,6 +11,7 @@ use App\Contracts\Persistence\EventInboxRepository;
 use App\Contracts\Persistence\EventStateRepository;
 use App\Contracts\Persistence\MockProviderRepository;
 use App\Contracts\Persistence\ProviderLockRepository;
+use App\Contracts\Persistence\ProviderOutboxRepository;
 use App\Contracts\Persistence\RestoreTaskRepository;
 use App\Contracts\Persistence\SyncRunRepository;
 use App\Contracts\Persistence\TransactionBoundary;
@@ -28,6 +29,7 @@ use App\Repositories\Eloquent\EloquentEmployeeRepository;
 use App\Repositories\Eloquent\EloquentEventInboxRepository;
 use App\Repositories\Eloquent\EloquentEventStateRepository;
 use App\Repositories\Eloquent\EloquentMockProviderRepository;
+use App\Repositories\Eloquent\EloquentProviderOutboxRepository;
 use App\Repositories\Eloquent\EloquentRestoreTaskRepository;
 use App\Repositories\Eloquent\EloquentSyncRunRepository;
 use Illuminate\Support\ServiceProvider;
@@ -36,6 +38,7 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
+        $this->app->bind(ProviderOutboxRepository::class, EloquentProviderOutboxRepository::class);
         $this->app->bind(EventPublisher::class, KafkaEventPublisher::class);
         $this->app->bind(DeviceProvider::class, JamfMockProvider::class);
         $this->app->bind(RemoteProviderGateway::class, HttpMockProviderAdapter::class);

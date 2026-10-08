@@ -2,11 +2,23 @@
 
 namespace App\Http\Controllers;
 
+use App\Contracts\Persistence\ProviderOutboxRepository;
 use App\Services\IndependentProviderService;
+use App\Services\ProducerOutboxPublisher;
 use Illuminate\Http\Request;
 
 final class IndependentProviderController extends Controller
 {
+    public function outbox(ProviderOutboxRepository $outbox)
+    {
+        return $outbox->activity();
+    }
+
+    public function retryOutbox(ProducerOutboxPublisher $publisher, ProviderOutboxRepository $outbox)
+    {
+        return $publisher->drain(10) + ['pending' => $outbox->pendingCount()];
+    }
+
     public function snapshot(IndependentProviderService $provider)
     {
         return $provider->snapshot();
