@@ -287,7 +287,7 @@ Removing assets because they are missing from a response requires a complete sna
 
 ## Verification
 
-Passed: 55 backend tests with 331 assertions, and the React production build.
+Passed: 56 backend tests with 341 assertions, and the React production build.
 
 Tests cover provider changes, event persistence, retries, duplicate/stale messages, timestamp suppression, partial fields, restoration and employee deletion. Docker/MySQL checks also verified provider CRUD, queued processing, restoration with older pending events and employee reactivation.
 
@@ -314,3 +314,15 @@ npm run build
 Before using this with real customers, add provider authentication, validate the real API/event contract, scope identities by tenant, benchmark processing, schedule reconciliation, define retention, add monitoring and test database backups.
 
 The current implementation is a local case study with separate provider/inventory services, separate databases, a provider outbox, Kafka, an inventory inbox/job queue and manual recovery actions. Company sharding and multiple providers remain future work.
+
+## Outbox delivery controls
+
+Activity separates Delivery to Kafka from Inventory processing. Waiting for Kafka means the provider outbox event has not received broker acknowledgment. Published to Kafka does not mean the inventory worker has finished. Each notification shows its device name, delivery attempts and last delivery error.
+
+Retry pending delivery immediately attempts up to ten pending outbox notifications through the provider API. Published notifications are not resent. Automatic delivery retries continue in the background. All events use the outbox, including when Kafka is healthy; it is not only an outage fallback. If the provider cannot be reached, inventory remains usable and Activity reports the unavailable outbox.
+
+Provider endpoints: GET /api/provider/outbox and POST /api/provider/outbox/retry on port 8002. Inventory proxies: GET /api/provider-outbox and POST /api/provider-outbox/retry on port 8000. These unauthenticated controls are for the local demonstration; production requires restricted access.
+
+The pending-details navigation issue is deferred in docs/backlog.md at the user's request.
+
+The new outbox controls passed API outage/retry checks and the frontend build. Fresh browser verification of those controls was blocked by an unavailable browser connection.

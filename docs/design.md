@@ -51,3 +51,7 @@ DeviceProvider maps the fixture. RemoteProviderGateway and TargetedDeviceProvide
 Only Jamf is supported at runtime. Multi-provider selection and company-scoped identities are not implemented.
 
 Company-based worker partitions and database shards can spread customer traffic. A large company's burst may still need device-based processing and coordination for shared metadata. Kafka buffers backlog; it does not remove inventory database limits. The README contains planning estimates, not capacity benchmarks.
+
+## Delivery activity
+
+The inventory Activity page proxies provider-owned outbox status over HTTP. It shows waiting versus acknowledged publication independently from inventory processing. Manual retry immediately drains at most ten pending messages using the same publisher as automatic retries; published rows are excluded. A failed publish remains pending with its error and attempt count. Provider database credentials never reach the inventory service. The controls are intended for local development; production needs authorization.
