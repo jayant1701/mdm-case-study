@@ -6,7 +6,7 @@ The mock Jamf provider and inventory backend use the same Laravel source but run
 
 The provider runs only database/provider-migrations. It owns provider_devices, provider_generation and producer_outbox. It cannot access inventory credentials.
 
-The inventory runs database/migrations. It owns assets, employees, specifications, recovery tasks, event inbox, checkpoints, shared metadata ordering, sync history, rejected notifications and job records. Legacy local-provider tables remain for compatibility tests and are not the source store in this deployment.
+The inventory runs database/migrations. It owns assets, employees, asset attributes, recovery tasks, event inbox, checkpoints, shared metadata ordering, sync history, rejected notifications and job records. Legacy local-provider tables remain for compatibility tests and are not the source store in this deployment.
 
 ## Device changes
 
@@ -30,7 +30,7 @@ RemoteProviderGateway is the HTTP adapter boundary. HttpMockProviderAdapter vali
 
 Sync Now requests the complete current provider snapshot. Recovery applies its device envelopes and checkpoints together. A snapshot older than already applied events is rejected; an equal device version with conflicting meaningful state is also rejected.
 
-The direct JSON import path remains available for assignment-level tests. The normal UI Sync Now path reads only the provider HTTP snapshot. Reset demo reloads the fixture into the provider, clears local inventory state and leaves inventory empty until Sync Now is selected. Provider generations and device versions remain monotonic during reset so a delayed pre-reset Kafka event is older than the new provider snapshot.
+POST /api/sync is the assignment-compatible path: the inventory backend reads the supplied JSON, imports it through the provider HTTP boundary and reconciles the returned versioned snapshot. The normal UI Sync Now path calls POST /api/sync/provider and reads only the provider HTTP snapshot. Reset demo reloads the fixture into the provider, clears local inventory state and leaves inventory empty until Sync Now is selected. Provider generations and device versions remain monotonic during reset so a delayed pre-reset Kafka event is older than the new provider snapshot.
 
 Local asset deletion saves provider identity and device name in RestoreTask and removes only inventory data. Testing lists pending local deletions without exposing a restore action. Full reconciliation can recreate an assigned device that still exists upstream. The targeted restoration service remains an internal recovery path and validates the provider identity/version.
 
@@ -54,4 +54,4 @@ Company-based worker partitions and database shards can spread customer traffic.
 
 ## Delivery activity
 
-The inventory Activity page proxies only the provider-owned pending outbox count over HTTP. It reports empty or waiting state and offers manual processing when needed. Testing contains reset, deterministic delivery-failure, local-deletion listing and technical processing history. Manual processing drains at most ten pending messages using the same publisher as automatic retries, while also bypassing their retry delay; published rows are excluded. Provider database credentials never reach the inventory service. The controls are registered only in local/testing environments.
+The inventory Activity page proxies only the provider-owned pending outbox count over HTTP. It reports empty or waiting state and offers manual processing when needed. Testing contains reset, deterministic delivery-failure, local-deletion listing and technical processing history. The deterministic control writes the durable state of a failed publication; it does not stop Kafka. Manual processing drains at most ten pending messages using the same publisher as automatic retries, while also bypassing their retry delay; published rows are excluded. Provider database credentials never reach the inventory service. Demo reset/failure routes are limited to local/testing environments. Outbox status and retry routes are always registered in this case study and require access control before production use.
