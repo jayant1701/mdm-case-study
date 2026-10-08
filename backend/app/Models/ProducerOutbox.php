@@ -12,6 +12,6 @@ final class ProducerOutbox extends Model
 
     protected function casts(): array
     {
-        return ['payload' => 'array', 'published_at' => 'datetime'];
+        return ['payload' => 'array', 'published_at' => 'datetime', 'next_attempt_at' => 'datetime'];
     }
 }

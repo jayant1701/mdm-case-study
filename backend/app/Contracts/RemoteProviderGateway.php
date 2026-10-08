@@ -13,4 +13,8 @@ interface RemoteProviderGateway extends TargetedDeviceProvider
     public function outbox(): array;
 
     public function retryOutbox(): array;
+
+    public function resetDemo(): array;
+
+    public function simulateKafkaFailure(): array;
 }

@@ -27,13 +27,51 @@ final class IndependentProviderService
                 abort(404, 'Provider device not found.');
             }
 
-return $this->envelope($row);
+            return $this->envelope($row);
         });
     }
 
     public function scan(): array
     {
         return $this->locked(fn () => $this->importRecords($this->fixture->snapshot()->devices));
+    }
+
+    public function resetDemo(): array
+    {
+        return $this->locked(function () {
+            ProducerOutbox::query()->delete();
+            $this->importRecords($this->fixture->snapshot()->devices);
+            ProducerOutbox::query()->delete();
+
+            return $this->snapshotUnlocked() + [
+                'active_devices' => ProviderDevice::where('state', '!=', 'removed')->count(),
+                'pending' => 0,
+            ];
+        });
+    }
+
+    public function simulateKafkaFailure(): array
+    {
+        return $this->locked(function () {
+            $row = ProviderDevice::where('state', 'assigned')->orderBy('id')->firstOrFail();
+            $device = $row->device;
+            $suffix = ' [Kafka recovery test]';
+            $name = $device['asset']['device_name'];
+            $device['asset']['device_name'] = str_ends_with($name, $suffix)
+                ? substr($name, 0, -strlen($suffix))
+                : $name.$suffix;
+            $event = $this->validate($row->provider_device_id, $device, false);
+            $summary = $this->commitPlans(
+                [['device' => $event->device, 'state' => $event->state()]],
+                ['attempts' => 1, 'last_error' => 'Simulated Kafka broker unavailable.', 'next_attempt_at' => now()->addHour()],
+            );
+
+            return [
+                'affected' => $summary['emitted'],
+                'pending' => ProducerOutbox::where('status', 'pending')->count(),
+                'provider_device_id' => $row->provider_device_id,
+            ];
+        });
     }
 
     public function seed(): array
@@ -129,7 +167,7 @@ return $this->envelope($row);
         return $this->snapshotUnlocked() + $summary;
     }
 
-    private function commitPlans(array $plans): array
+    private function commitPlans(array $plans, array $outboxState = []): array
     {
         $changed = [];
         foreach ($plans as $plan) {
@@ -163,7 +201,15 @@ return $this->envelope($row);
             $type = $plan['state'] === 'removed' ? 'device.removed' : ($plan['state'] === 'unassigned' ? 'device.unassigned' : (! $old || $old->state === 'removed' ? 'device.added' : 'device.changed'));
             $event = DeviceEvent::parse(['event_id' => (string) Str::uuid(), 'provider_device_id' => $id, 'version' => $version, 'producer_generation' => $generation, 'type' => $type, 'device' => $device]);
             ProviderDevice::updateOrCreate(['provider_device_id' => $id], ['serial_code' => $device['serial_code'], 'version' => $version, 'producer_generation' => $generation, 'state' => $plan['state'], 'fingerprint' => $plan['hash'], 'device' => $event->envelope['device']]);
-            ProducerOutbox::create(['event_id' => $event->envelope['event_id'], 'provider_device_id' => $id, 'payload' => $event->envelope, 'status' => 'pending']);
+            ProducerOutbox::create([
+                'event_id' => $event->envelope['event_id'],
+                'provider_device_id' => $id,
+                'payload' => $event->envelope,
+                'status' => 'pending',
+                'attempts' => $outboxState['attempts'] ?? 0,
+                'last_error' => $outboxState['last_error'] ?? null,
+                'next_attempt_at' => $outboxState['next_attempt_at'] ?? null,
+            ]);
             $ids[] = $event->envelope['event_id'];
         }
 
@@ -200,16 +246,16 @@ return $this->envelope($row);
                 throw new RuntimeException('Provider generation lock is missing.');
             }
 
-return $operation();
+            return $operation();
         }, 3);
     }
 
     private function merge(array $state, array $patch): array
     {
         foreach ($patch as $key => $value) {
-            $state[$key] = is_array($value) && isset($state[$key]) && is_array($state[$key]) ? $this->merge($state[$key],$value) : $value;
+            $state[$key] = is_array($value) && isset($state[$key]) && is_array($state[$key]) ? $this->merge($state[$key], $value) : $value;
         }
 
-return $state;
+        return $state;
     }
 }

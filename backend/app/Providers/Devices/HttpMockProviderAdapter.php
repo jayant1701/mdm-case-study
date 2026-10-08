@@ -65,6 +65,16 @@ final class HttpMockProviderAdapter implements RemoteProviderGateway
         return Http::acceptJson()->timeout(45)->post($this->url('/outbox/retry'))->throw()->json();
     }
 
+    public function resetDemo(): array
+    {
+        return $this->request('post', '/testing/reset');
+    }
+
+    public function simulateKafkaFailure(): array
+    {
+        return $this->request('post', '/testing/kafka-failure');
+    }
+
     public function seed(): array
     {
         return $this->request('post', '/seed');
@@ -105,7 +115,7 @@ final class HttpMockProviderAdapter implements RemoteProviderGateway
                     throw new RuntimeException('Device generation exceeds snapshot generation.');
                 }$seen[$event->device->providerId] = true;
             }
-        } elseif ($path === '/snapshot' || $path === '/import' || $path === '/scan' || $path === '/seed') {
+        } elseif (in_array($path, ['/snapshot', '/import', '/scan', '/seed', '/testing/reset'], true)) {
             throw new RuntimeException('Provider response must contain complete devices snapshot.');
         }
 

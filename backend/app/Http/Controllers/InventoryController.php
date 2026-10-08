@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Contracts\Persistence\AssetRepository;
 use App\Contracts\Persistence\EmployeeRepository;
+use App\Contracts\Persistence\RestoreTaskRepository;
 use App\Contracts\Persistence\SyncRunRepository;
 use App\Services\AssetDeletionService;
 use App\Services\JamfSyncService;
@@ -30,6 +31,11 @@ final class InventoryController extends Controller
     public function runs()
     {
         return ['data' => $this->runs->recent(25)];
+    }
+
+    public function deletedAssets(RestoreTaskRepository $restorations): array
+    {
+        return ['data' => $restorations->deletedFor('jamf')];
     }
 
     public function sync(JamfSyncService $sync)

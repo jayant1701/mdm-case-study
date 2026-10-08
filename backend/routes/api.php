@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\DemoController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\MockProviderController;
@@ -18,6 +19,7 @@ Route::delete('/assets/{asset}', [InventoryController::class, 'deleteAsset']);
 Route::delete('/employees/{employee}', [InventoryController::class, 'deleteEmployee']);
 Route::post('/sync', [InventoryController::class, 'sync']);
 Route::get('/sync-runs', [InventoryController::class, 'runs']);
+Route::get('/deleted-assets', [InventoryController::class, 'deletedAssets']);
 Route::post('/restorations', [InventoryController::class, 'restore']);
 
 Route::get('/events', [EventController::class, 'index']);
@@ -34,3 +36,8 @@ if (config('mdm.provider_mode') === 'local') {
     Route::post('/provider/jamf/seed', [MockProviderController::class, 'seed']);
 }
 Route::post('/sync/provider', [InventoryController::class, 'syncProvider']);
+
+if (app()->environment('local', 'testing')) {
+    Route::post('/demo/reset', [DemoController::class, 'reset']);
+    Route::post('/demo/kafka-failure', [DemoController::class, 'simulateKafkaFailure']);
+}

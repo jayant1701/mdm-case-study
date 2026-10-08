@@ -147,10 +147,50 @@ class IndependentProviderTest extends TestCase
                 $this->messages[] = $payload;
             }
         };
-        $result = (new ProducerOutboxPublisher($success))->drain();
+        $result = (new ProducerOutboxPublisher($success))->drain(100, true);
         $this->assertSame(7, $result['published']);
         $this->assertCount(7, $success->messages);
         $this->assertSame('published', $row->fresh()->status);
+    }
+
+    public function test_demo_failure_stays_visible_until_manual_recovery(): void
+    {
+        $this->service()->import($this->source);
+        ProducerOutbox::query()->update(['status' => 'published', 'published_at' => now()]);
+
+        $failure = $this->service()->simulateKafkaFailure();
+
+        $this->assertSame(1, $failure['affected']);
+        $this->assertSame(1, $failure['pending']);
+        $pending = ProducerOutbox::where('status', 'pending')->firstOrFail();
+        $this->assertSame(1, $pending->attempts);
+        $this->assertStringContainsString('Simulated Kafka', $pending->last_error);
+        $this->assertTrue($pending->next_attempt_at->isFuture());
+
+        $success = new class implements EventPublisher
+        {
+            public function publish(array $payload): void {}
+        };
+        $publisher = new ProducerOutboxPublisher($success);
+        $this->assertSame(0, $publisher->drain()['published']);
+        $this->assertSame(1, $publisher->drain(10, true)['published']);
+        $this->assertSame('published', $pending->fresh()->status);
+    }
+
+    public function test_demo_reset_reloads_fixture_without_queuing_notifications(): void
+    {
+        $this->service()->import($this->source);
+        $this->service()->patch('101', ['specifications' => ['ram_gb' => 64]]);
+        $generation = $this->service()->snapshot()['generation'];
+
+        $result = $this->service()->resetDemo();
+
+        $this->assertCount(7, $result['devices']);
+        $this->assertSame(7, $result['active_devices']);
+        $this->assertSame(0, $result['pending']);
+        $this->assertGreaterThan($generation, $result['generation']);
+        $this->assertSame(16.0, (float) $this->service()->current('101')['device']['specifications']['ram_gb']);
+        $this->assertDatabaseCount('producer_outbox', 0);
     }
 
     public function test_partial_patch_and_shared_employee_updates_emit_only_affected_devices(): void

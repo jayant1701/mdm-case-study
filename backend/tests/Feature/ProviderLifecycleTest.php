@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Contracts\DeviceProvider;
+use App\Contracts\Persistence\DemoStateRepository;
 use App\Contracts\Persistence\MockProviderRepository;
 use App\Models\Asset;
 use App\Models\EventInbox;
@@ -93,6 +94,38 @@ final class ProviderLifecycleTest extends InventoryTestCase
         app(EventProcessor::class)->process($old->id);
         $this->assertSame('ignored_stale', $old->fresh()->outcome);
         $this->assertSame(64.0, Asset::where('provider_device_id', '101')->first()->specifications->ram_gb);
+    }
+
+    public function test_local_deletions_are_listed_without_restoring_the_asset(): void
+    {
+        $this->sync();
+        $asset = Asset::where('provider_device_id', '101')->firstOrFail();
+
+        $this->deleteJson('/api/assets/'.$asset->id)->assertNoContent();
+
+        $this->getJson('/api/deleted-assets')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.provider_device_id', '101')
+            ->assertJsonPath('data.0.serial_code', $asset->serial_code)
+            ->assertJsonPath('data.0.device_name', $asset->device_name);
+        $this->assertDatabaseMissing('assets', ['provider_device_id' => '101']);
+    }
+
+    public function test_demo_inventory_reset_clears_local_state(): void
+    {
+        $this->sync();
+        $asset = Asset::where('provider_device_id', '101')->firstOrFail();
+        $this->deleteJson('/api/assets/'.$asset->id)->assertNoContent();
+
+        app(DemoStateRepository::class)->resetInventory();
+
+        $this->assertDatabaseCount('assets', 0);
+        $this->assertDatabaseCount('employees', 0);
+        $this->assertDatabaseCount('restore_tasks', 0);
+        $this->assertDatabaseCount('sync_runs', 0);
+        $this->assertDatabaseCount('event_inboxes', 0);
+        $this->assertDatabaseHas('sync_locks', ['provider' => 'jamf']);
     }
 
     public function test_omitted_hardware_is_preserved_in_complete_events_but_explicit_null_clears(): void

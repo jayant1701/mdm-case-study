@@ -11,12 +11,27 @@ final class EloquentRestoreTaskRepository implements RestoreTaskRepository
 {
     public function recordLocalDeletion(Asset $asset): void
     {
-        RestoreTask::updateOrCreate(['provider' => $asset->provider, 'serial_code' => $asset->serial_code], ['provider_device_id' => $asset->provider_device_id, 'deleted_at' => now(), 'status' => 'pending', 'attempts' => 0, 'error' => null]);
+        RestoreTask::updateOrCreate(['provider' => $asset->provider, 'serial_code' => $asset->serial_code], ['provider_device_id' => $asset->provider_device_id, 'device_name' => $asset->device_name, 'deleted_at' => now(), 'status' => 'pending', 'attempts' => 0, 'error' => null]);
     }
 
     public function pendingFor(string $provider): Collection
     {
         return RestoreTask::where('status', 'pending')->where('provider', $provider)->get();
+    }
+
+    public function deletedFor(string $provider): array
+    {
+        return RestoreTask::where('provider', $provider)
+            ->where('status', 'pending')
+            ->latest('deleted_at')
+            ->get()
+            ->map(fn (RestoreTask $task) => [
+                'provider' => $task->provider,
+                'provider_device_id' => $task->provider_device_id,
+                'serial_code' => $task->serial_code,
+                'device_name' => $task->device_name,
+                'deleted_at' => $task->deleted_at?->toISOString(),
+            ])->all();
     }
 
     public function recordAttempt(int $id): void

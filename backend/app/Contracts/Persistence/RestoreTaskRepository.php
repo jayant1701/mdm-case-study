@@ -11,6 +11,8 @@ interface RestoreTaskRepository
 
     public function pendingFor(string $provider): Collection;
 
+    public function deletedFor(string $provider): array;
+
     public function recordAttempt(int $id): void;
 
     public function resolve(int $id, string $status): void;

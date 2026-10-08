@@ -5,6 +5,7 @@ namespace App\Providers;
 use App\Contracts\DeviceProvider;
 use App\Contracts\EventPublisher;
 use App\Contracts\Persistence\AssetRepository;
+use App\Contracts\Persistence\DemoStateRepository;
 use App\Contracts\Persistence\DeviceModelRepository;
 use App\Contracts\Persistence\EmployeeRepository;
 use App\Contracts\Persistence\EventInboxRepository;
@@ -24,6 +25,7 @@ use App\Providers\Devices\MockProviderAdapter;
 use App\Repositories\Eloquent\DatabaseProviderLockRepository;
 use App\Repositories\Eloquent\DatabaseTransactionBoundary;
 use App\Repositories\Eloquent\EloquentAssetRepository;
+use App\Repositories\Eloquent\EloquentDemoStateRepository;
 use App\Repositories\Eloquent\EloquentDeviceModelRepository;
 use App\Repositories\Eloquent\EloquentEmployeeRepository;
 use App\Repositories\Eloquent\EloquentEventInboxRepository;
@@ -45,6 +47,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(TargetedDeviceProvider::class, fn ($app) => $app->make(config('mdm.provider_mode') === 'remote' ? HttpMockProviderAdapter::class : MockProviderAdapter::class));
         foreach ([
             AssetRepository::class => EloquentAssetRepository::class,
+            DemoStateRepository::class => EloquentDemoStateRepository::class,
             MockProviderRepository::class => EloquentMockProviderRepository::class,
             EventStateRepository::class => EloquentEventStateRepository::class,
             EmployeeRepository::class => EloquentEmployeeRepository::class,

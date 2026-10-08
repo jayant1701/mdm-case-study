@@ -16,7 +16,17 @@ final class IndependentProviderController extends Controller
 
     public function retryOutbox(ProducerOutboxPublisher $publisher, ProviderOutboxRepository $outbox)
     {
-        return $publisher->drain(10) + ['pending' => $outbox->pendingCount()];
+        return $publisher->drain(10, true) + ['pending' => $outbox->pendingCount()];
+    }
+
+    public function resetDemo(IndependentProviderService $provider): array
+    {
+        return $provider->resetDemo();
+    }
+
+    public function simulateKafkaFailure(IndependentProviderService $provider): array
+    {
+        return $provider->simulateKafkaFailure();
     }
 
     public function snapshot(IndependentProviderService $provider)

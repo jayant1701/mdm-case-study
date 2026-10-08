@@ -14,4 +14,8 @@ Route::prefix('provider')->group(function () {
     Route::post('/devices', [IndependentProviderController::class, 'create']);
     Route::patch('/devices/{device}', [IndependentProviderController::class, 'patch']);
     Route::delete('/devices/{device}', [IndependentProviderController::class, 'delete']);
+    if (app()->environment('local', 'testing')) {
+        Route::post('/testing/reset', [IndependentProviderController::class, 'resetDemo']);
+        Route::post('/testing/kafka-failure', [IndependentProviderController::class, 'simulateKafkaFailure']);
+    }
 });
