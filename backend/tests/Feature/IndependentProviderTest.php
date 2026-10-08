@@ -22,8 +22,7 @@ class IndependentProviderTest extends TestCase
         $controller = app(IndependentProviderController::class);
         $activity = $controller->outbox($outbox);
         $this->assertSame(7, $activity['pending']);
-        $this->assertCount(7, $activity['data']);
-        $this->assertArrayHasKey('device_name', $activity['data'][0]);
+        $this->assertSame(['pending'], array_keys($activity));
         $this->app->instance(EventPublisher::class, new class implements EventPublisher
         {
             public function publish(array $payload): void
@@ -34,7 +33,7 @@ class IndependentProviderTest extends TestCase
         $failed = $controller->retryOutbox(app(ProducerOutboxPublisher::class), $outbox);
         $this->assertSame(1, $failed['failed']);
         $this->assertSame(7, $failed['pending']);
-        $this->assertStringContainsString('broker unavailable', $controller->outbox($outbox)['data'][6]['last_error']);
+        $this->assertStringContainsString('broker unavailable', ProducerOutbox::where('status', 'pending')->first()->last_error);
         $this->app->instance(EventPublisher::class, new class implements EventPublisher
         {
             public function publish(array $payload): void {}
