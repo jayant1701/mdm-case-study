@@ -3,18 +3,18 @@
 ## Contents
 
 1. [Case study](#1-case-study)
-2. [Codebase onboarding](#2-codebase-onboarding)
-3. [Run the application](#3-run-the-application)
-4. [Application behavior and mock data](#4-application-behavior-and-mock-data)
-5. [Implemented design](#5-implemented-design)
-6. [Data model](#6-data-model)
-7. [Deletion and reconciliation](#7-deletion-and-reconciliation)
-8. [Failure handling and Activity](#8-failure-handling-and-activity)
-9. [API endpoints](#9-api-endpoints)
-10. [Alternatives and capacity](#10-alternatives-and-capacity)
-11. [Serverless alternative and cost](#11-serverless-alternative-and-cost)
-12. [Verification](#12-verification)
-13. [Remaining scope](#13-remaining-scope)
+2. [Remaining scope](#2-remaining-scope)
+3. [Codebase onboarding](#3-codebase-onboarding)
+4. [Run the application](#4-run-the-application)
+5. [Application behavior and mock data](#5-application-behavior-and-mock-data)
+6. [Implemented design](#6-implemented-design)
+7. [Data model](#7-data-model)
+8. [Deletion and reconciliation](#8-deletion-and-reconciliation)
+9. [Failure handling and Activity](#9-failure-handling-and-activity)
+10. [API endpoints](#10-api-endpoints)
+11. [Alternatives and capacity](#11-alternatives-and-capacity)
+12. [Serverless alternative and cost](#12-serverless-alternative-and-cost)
+13. [Verification](#13-verification)
 
 ## 1. Case study
 
@@ -65,7 +65,19 @@ The assignment-compatible path reads the supplied JSON through Laravel. The solu
 
 The repository does not connect to a real Jamf tenant. A real integration must verify Jamf response shapes, authentication, pagination, filters and rate limits.
 
-## 2. Codebase onboarding
+## 2. Remaining scope
+
+The delivered application is a local case study with one mock Jamf provider and one company scope. Before connecting real customers, implement:
+
+1. **Multi-tenancy.** Add `company_id` to every tenant-owned record, event and provider connection. Replace global uniqueness with tenant-scoped unique indexes, including `(company_id, serial_code)`, `(company_id, email)` and `(company_id, provider, provider_device_id)`. Repository methods and API queries must require the authenticated company scope. Provider credentials must also be stored per company.
+
+2. **Paginated snapshot reconciliation.** The current adapter materializes one complete response in memory. A real adapter should request every page and either stage or stream the records into one validated reconciliation run. If any page fails or the snapshot is inconsistent, fail the run without treating missing devices as removals. Only a successfully completed snapshot may remove assets by absence. Schedule this reconciliation periodically to recover missed events.
+
+3. **Authentication and authorization.** Verify the real Jamf authentication method and keep each company's provider credentials encrypted outside application code. Authenticate application users, resolve their `company_id`, and authorize every asset, employee, sync and operational action within that company. Restrict retry/outbox controls to operational roles and disable demo endpoints outside local/testing environments.
+
+Additional work includes a runtime provider registry to remove hard-coded provider selection, retention and archival for Kafka/inbox/outbox/rejected records, measured load testing before adding indexes or partitions beyond those required for tenant uniqueness, and mobile and screen-reader testing.
+
+## 3. Codebase onboarding
 
 ### Start here
 
@@ -186,7 +198,7 @@ Bindings live in `AppServiceProvider`. Some repository contracts still return El
 | Change UI behavior | `frontend/src.jsx`, `frontend/views.jsx`, `frontend/style.css` |
 | Add a local demonstration | `DemoControlService`, `DemoController`, local routes and Testing UI |
 
-## 3. Run the application
+## 4. Run the application
 
 Docker Desktop is the only host runtime required.
 
@@ -212,7 +224,7 @@ Delete both MySQL volumes and the Kafka volume with:
 docker compose down -v
 ```
 
-## 4. Application behavior and mock data
+## 5. Application behavior and mock data
 
 ### User interface
 
@@ -257,7 +269,58 @@ Manufacturer, model identifier, model name, platform, processor and core count a
 
 JSON order, increasing provider IDs, purchase date and report date are not change cursors. None reliably represents edits and removals under the supplied contract.
 
-## 5. Implemented design
+## 6. Implemented design
+
+### Architecture
+
+```mermaid
+flowchart LR
+    UI[React UI<br/>port 5173] -->|HTTP| InventoryAPI[Inventory API<br/>port 8000]
+
+    subgraph Provider[Provider domain]
+        ProviderAPI[Provider API<br/>port 8002]
+        ProviderDB[(Provider MySQL<br/>provider_devices)]
+        Outbox[(producer_outbox)]
+        Publisher[Outbox publisher]
+        ProviderAPI -->|one transaction| ProviderDB
+        ProviderAPI -->|same transaction| Outbox
+        Outbox --> Publisher
+    end
+
+    InventoryAPI -->|snapshot and provider controls| ProviderAPI
+    Publisher --> Kafka[[Kafka<br/>device-events]]
+
+    subgraph Inventory[Inventory domain]
+        Consumer[Kafka consumer]
+        Inbox[(event_inboxes)]
+        Worker[Laravel queue worker]
+        Processor[EventProcessor]
+        InventoryDB[(Inventory MySQL<br/>assets, employees, models)]
+        Kafka --> Consumer
+        Consumer -->|durable acceptance| Inbox
+        Inbox --> Worker
+        Worker --> Processor
+        Processor --> InventoryDB
+        InventoryAPI --> InventoryDB
+    end
+```
+
+The UI calls only the inventory API. Sync Now and Provider Lab are proxied through the inventory service's `RemoteProviderGateway`; the browser does not receive provider database credentials.
+
+### Design patterns used
+
+| Pattern | Use in this repository |
+|---|---|
+| Adapter | `DeviceProvider`, `TargetedDeviceProvider` and `RemoteProviderGateway` isolate provider-specific formats and transport |
+| Repository | Persistence contracts keep Eloquent queries out of orchestration services |
+| Dependency injection | `AppServiceProvider` selects concrete adapters and repositories |
+| Transactional outbox | Provider state and its outgoing event commit together |
+| Durable inbox and idempotent consumer | Events are stored before Kafka acknowledgement and duplicates are safe |
+| Policy object | `SharedMetadataPolicy` protects shared employee/model data from older cross-device events |
+| Data transfer objects | `DeviceRecord`, `DeviceEvent` and `DeviceSnapshot` carry normalized provider data |
+| Transaction boundary | Application services group inventory writes and checkpoints atomically |
+
+The design is event-driven but is not event sourced: current inventory tables remain the system's local read state, and events are retained for delivery/recovery rather than used to rebuild every domain record permanently.
 
 ### Event path
 
@@ -352,7 +415,7 @@ A database transaction and a lock solve different problems. The transaction keep
 
 The local broker has three partitions, one replica, seven-day retention and a persistent volume. This is the case-study topology, not a capacity or availability claim.
 
-## 6. Data model
+## 7. Data model
 
 ### Inventory database
 
@@ -399,7 +462,7 @@ Repository interfaces are the database access boundary. Eloquent implementations
 
 `provider_device_id` is the upstream record identity used for events, versions and targeted lookups. Serial code identifies the physical asset locally. Both are retained because they solve different identity problems.
 
-## 7. Deletion and reconciliation
+## 8. Deletion and reconciliation
 
 ### Local asset deletion
 
@@ -422,7 +485,7 @@ A provider removal or missing employee email removes the local asset because onl
 
 `report_date` is a freshness watermark, not an event cursor. `report_date` and `last_contact_at` do not trigger events by themselves, which prevents routine reporting timestamps from flooding Kafka.
 
-## 8. Failure handling and Activity
+## 9. Failure handling and Activity
 
 | Failure | Implemented behavior |
 |---|---|
@@ -448,7 +511,7 @@ The deterministic **Simulate Kafka failure** control creates the same durable pe
 
 Demo reset/failure and Provider Lab routes are registered only for local/testing use. Provider database credentials never reach the inventory service.
 
-## 9. API endpoints
+## 10. API endpoints
 
 ### Provider API: port 8002
 
@@ -495,7 +558,7 @@ Demo reset/failure and Provider Lab routes are registered only for local/testing
 
 The local operational endpoints are unauthenticated for this case study. They need restricted, company-scoped access before a multi-customer deployment.
 
-## 10. Alternatives and capacity
+## 11. Alternatives and capacity
 
 ### Solutions considered
 
@@ -545,7 +608,7 @@ Kafka already supports horizontal scaling. The expected load does not justify ad
 
 For a multi-customer product, add `company_id` to identities and queries so two companies can safely have the same email, serial or provider ID and cannot access each other's data. This is a data-isolation requirement before it is a sharding strategy.
 
-## 11. Serverless alternative and cost
+## 12. Serverless alternative and cost
 
 An alternative deployment can keep the same domain and adapter boundaries while replacing always-running processes:
 
@@ -577,7 +640,7 @@ Logging cost should be controlled at the source: structured error/state-transiti
 
 A previous Prime Video subscription and buy/rent workload serving millions of customers in North America cost the team about 7–8k per month. Its currency, traffic profile and service breakdown were not supplied, so it is context rather than this system's forecast. It shows that customer traffic and observability can cost much more than the small event path above.
 
-## 12. Verification
+## 13. Verification
 
 The backend suite completed with **66 tests and 438 assertions**. Laravel formatting and the React production build also completed successfully.
 
@@ -620,15 +683,3 @@ Browser verification covered:
 - Activity displays device, serial, type and retry time;
 - pending rows export to CSV and manual processing clears the outbox;
 - Provider Lab creates, updates and removes provider state before explicit reconciliation.
-
-## 13. Remaining scope
-
-The delivered application is a local case study with one mock Jamf provider and one company scope. Before connecting real customers, implement:
-
-1. **Multi-tenancy.** Add `company_id` to every tenant-owned record, event and provider connection. Replace global uniqueness with tenant-scoped unique indexes, including `(company_id, serial_code)`, `(company_id, email)` and `(company_id, provider, provider_device_id)`. Repository methods and API queries must require the authenticated company scope. Provider credentials must also be stored per company.
-
-2. **Paginated snapshot reconciliation.** Update the provider adapter to request every page and build one validated complete snapshot before reconciliation. If any page fails or the snapshot is inconsistent, fail the sync without treating missing devices as removals. Only a successfully completed snapshot may remove local assets by absence. Schedule this reconciliation periodically as recovery for missed events.
-
-3. **Authentication and authorization.** Verify the real Jamf authentication method and keep each company's provider credentials encrypted outside application code. Authenticate application users, resolve their `company_id`, and authorize every asset, employee, sync and operational action within that company. Restrict retry/outbox controls to operational roles and disable demo endpoints outside local/testing environments.
-
-Additional work includes a runtime provider registry, retention and archival for Kafka/inbox/outbox/rejected records, measured load testing before adding indexes or partitions beyond those required for tenant uniqueness, and mobile and screen-reader testing.
