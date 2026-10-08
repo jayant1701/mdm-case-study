@@ -623,12 +623,12 @@ Browser verification covered:
 
 ## 13. Remaining scope
 
-The delivered application is a local case study with one mock Jamf provider and one company scope. Before connecting real customers:
+The delivered application is a local case study with one mock Jamf provider and one company scope. Before connecting real customers, implement:
 
-- verify the real Jamf response, authentication, pagination, filtering and rate limits;
-- add scheduled periodic reconciliation;
-- add a provider registry and tenant-specific credentials for multiple providers;
-- add `company_id` and enforce company-scoped authorization;
-- define retention and archival for Kafka, inbox, outbox and rejected records;
-- benchmark measured peak workloads before adding indexes, partitions or shards;
-- complete multi-page pagination, mobile layout and screen-reader testing.
+1. **Multi-tenancy.** Add `company_id` to every tenant-owned record, event and provider connection. Replace global uniqueness with tenant-scoped unique indexes, including `(company_id, serial_code)`, `(company_id, email)` and `(company_id, provider, provider_device_id)`. Repository methods and API queries must require the authenticated company scope. Provider credentials must also be stored per company.
+
+2. **Paginated snapshot reconciliation.** Update the provider adapter to request every page and build one validated complete snapshot before reconciliation. If any page fails or the snapshot is inconsistent, fail the sync without treating missing devices as removals. Only a successfully completed snapshot may remove local assets by absence. Schedule this reconciliation periodically as recovery for missed events.
+
+3. **Authentication and authorization.** Verify the real Jamf authentication method and keep each company's provider credentials encrypted outside application code. Authenticate application users, resolve their `company_id`, and authorize every asset, employee, sync and operational action within that company. Restrict retry/outbox controls to operational roles and disable demo endpoints outside local/testing environments.
+
+Additional work includes a runtime provider registry, retention and archival for Kafka/inbox/outbox/rejected records, measured load testing before adding indexes or partitions beyond those required for tenant uniqueness, and mobile and screen-reader testing.
