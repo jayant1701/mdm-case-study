@@ -67,6 +67,10 @@ final class DeviceEventSimulator
             $state = $device['email'] === null ? 'unassigned' : 'assigned';
             $hash = DeviceEvent::semanticHash($device, $state);
             $changed = ! $old || $old->state !== $state || $old->fingerprint !== $hash;
+            // Backfill a newly introduced provider store without manufacturing changes.
+            if (! $this->providerStore->find((string) $id)) {
+                $this->providerStore->store((string) $id, $device, $state);
+            }
             if ($changed || $fence) {
                 $plans[] = ['id' => (string) $id, 'device' => $device, 'state' => $state, 'hash' => $hash, 'old' => $old, 'changed' => $changed];
             }

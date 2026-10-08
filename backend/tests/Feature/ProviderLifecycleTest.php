@@ -8,12 +8,24 @@ use App\Models\Asset;
 use App\Models\EventInbox;
 use App\Services\DeviceEventSimulator;
 use App\Services\EventProcessor;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Mockery;
 use Tests\InventoryTestCase;
 
 final class ProviderLifecycleTest extends InventoryTestCase
 {
+    public function test_seed_backfills_provider_store_without_duplicate_notifications(): void
+    {
+        Queue::fake();
+        $this->sync();
+        DB::table('mock_provider_devices')->delete();
+        $this->postJson('/api/provider/jamf/seed')->assertStatus(202)->assertJsonPath('emitted', 0);
+        $this->getJson('/api/provider/jamf/devices/101')->assertOk();
+        $this->assertDatabaseCount('mock_provider_devices', 7);
+        $this->assertDatabaseCount('event_inboxes', 0);
+    }
+
     private function drain(): void
     {
         foreach (EventInbox::where('status', 'pending')->orderBy('id')->get() as $event) {
