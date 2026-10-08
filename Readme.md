@@ -117,7 +117,7 @@ The choices cover separate parts of the problem: detecting changes, deciding wha
 | Area | Solution | Use / drawback |
 |---|---|---|
 | Change detection | Full synchronization | Keep for initial import and recovery; wasteful for every change |
-| Change detection | Scheduled polling with a `reportDate` cursor | Efficient only if the API can filter by `reportDate` and guarantees every edit, reassignment and removal advances it; the supplied contract guarantees neither. Using `lastContactTime` instead would be noisy because routine check-ins change it |
+| Change detection | Scheduled polling with a `reportDate` cursor | The real Jamf paginated inventory API can filter on `general.reportDate`, which reduces repeated reads. It cannot reveal a device that disappeared after deletion, and the supplied mock `/snapshot` endpoint has no filter. Using `lastContactTime` instead would be noisy because routine check-ins change it |
 | Change detection | Increasing device ID | Finds later additions only; misses edits, reassignments, removals and missing records below the latest ID |
 | Change detection | Purchase-date filter | Misses later edits, removals and reassignment of the same device to another employee |
 | Notification contents | ID-only notification plus provider GET | Smaller notification, but every change needs another provider request |
@@ -385,7 +385,7 @@ Site is separate from assignment. Employee email alone determines whether a devi
 
 Manufacturer, model identifier, model name, platform, processor and core count are treated as fixed shared configuration. Conflicting non-null values for the same manufacturer and model identifier reject the change. Missing values do not erase known values. If a real provider permits processor or core upgrades without changing the model identifier, those fields should move to the asset level or a separate configuration entity.
 
-JSON order, increasing provider IDs, purchase date and `reportDate` are not reliable query cursors under the supplied contract. A `reportDate` change can produce an event, but the contract does not guarantee that every edit, reassignment or removal updates it. `lastContactTime` changes routinely and is excluded from change detection.
+The [real Jamf paginated inventory API](https://developer.jamf.com/platform-api/reference/get_v4-computers-inventory-1) can filter on `general.reportDate`. That can reduce scheduled reads, but the supplied mock endpoint does not implement the filter and filtering cannot identify a device that disappeared after deletion. A `reportDate` change can produce an event in this implementation. `lastContactTime` changes routinely and is excluded from change detection.
 
 ## 6. Implemented design
 
