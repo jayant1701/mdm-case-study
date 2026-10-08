@@ -109,10 +109,10 @@ Use event-driven synchronization for normal provider changes. The Kafka consumer
 | Operation | Trigger | Purpose |
 |---|---|---|
 | Kafka event processing | Continuous | Apply individual provider changes automatically |
-| Process pending notifications | Automatic publisher or Activity button | Retry saved provider outbox notifications that have not reached Kafka |
-| Sync Now | User button | Fetch the complete Jamf snapshot and make MySQL match it |
+| Process pending notifications | Automatic publisher, Activity button or Sync Now | Retry up to ten saved provider outbox notifications that have not reached Kafka |
+| Sync Now | User button | Retry pending delivery, then fetch the complete Jamf snapshot and make MySQL match it |
 
-Sync Now implements the assignment's provider-fetch workflow. It restores locally deleted assets and employees that still exist and remain assigned upstream, creates other missing assigned records, applies changed values, and removes local assets that are absent or unassigned upstream. It does not publish outbox rows to Kafka.
+Sync Now first asks the provider to publish up to ten pending outbox notifications to Kafka. It then implements the assignment's provider-fetch workflow. It restores locally deleted assets and employees that still exist and remain assigned upstream, creates other missing assigned records, applies changed values, and removes local assets that are absent or unassigned upstream. The sync result records how many notifications were published, failed or remain pending. Outbox publication and snapshot retrieval are separate provider calls; a successful publication is not rolled back if the later snapshot fails.
 
 In healthy operation, Kafka has already applied every change and Sync Now finds no differences. The complete fetch remains useful because outbox retry cannot discover a provider change that never entered the outbox, an event no longer available from Kafka, a rejected event, or a locally deleted record that has not changed upstream.
 
@@ -290,7 +290,7 @@ docker compose down -v
 - **Activity** shows provider notifications waiting for Kafka and inventory events that exhausted automatic retries. Pending delivery rows can be exported as CSV or processed manually.
 - **Testing** resets the demo, creates a deterministic Kafka-delivery failure, changes provider devices through Provider Lab, lists locally deleted assets and shows technical history.
 
-Provider Lab writes provider state and a durable outbox notification. The normal Kafka path can update inventory asynchronously. **Sync Now** explicitly fetches the complete provider snapshot and reconciles inventory, including recovery from a missed event.
+Provider Lab writes provider state and a durable outbox notification. The normal Kafka path can update inventory asynchronously. **Sync Now** forces an immediate outbox retry, then fetches the complete provider snapshot and reconciles inventory, including recovery from a missed event.
 
 ### Purpose of the JSON fixture
 
@@ -299,7 +299,7 @@ Provider Lab writes provider state and a durable outbox notification. The normal
 There are two sync paths:
 
 1. `POST /api/sync` is assignment-compatible. Laravel reads the JSON, sends it through the provider import boundary and reconciles the returned versioned snapshot.
-2. **Sync Now** calls `POST /api/sync/provider`. It reads the provider's current HTTP snapshot, not the file.
+2. **Sync Now** calls `POST /api/sync/provider`. It first retries pending provider outbox delivery, then reads the provider's current HTTP snapshot, not the file.
 
 Provider POST, PATCH and DELETE operations update the provider database and create outbox events. Event workers process saved event payloads without reading the JSON or fetching the entire provider snapshot.
 
@@ -409,6 +409,7 @@ The consumer disables automatic offset commits. It validates each Kafka record a
 React Sync Now
   -> POST /api/sync/provider
   -> HttpMockProviderAdapter
+  -> retry up to ten pending provider outbox notifications to Kafka
   -> complete provider snapshot
   -> RemoteProviderSyncService
   -> DeviceReconciler
@@ -429,6 +430,7 @@ Testing form
   -> UI reports the provider change
 
 Sync Now
+  -> retry pending provider outbox notifications
   -> provider snapshot
   -> inventory reconciliation
   -> refreshed Assets and Employees
@@ -596,7 +598,7 @@ Demo reset/failure and Provider Lab routes are registered only for local/testing
 | DELETE | `/api/assets/{id}` | Delete only the local asset and retain recovery identity |
 | DELETE | `/api/employees/{id}` | Delete only the active employee and retain identity |
 | POST | `/api/sync` | Direct fixture import and reconciliation |
-| POST | `/api/sync/provider` | Reconcile with provider state; used by Sync Now |
+| POST | `/api/sync/provider` | Retry pending outbox delivery, then reconcile with provider state; used by Sync Now |
 | GET | `/api/deleted-assets` | List local asset deletions |
 | POST | `/api/restorations` | Targeted provider lookup and recovery; no UI action |
 | GET | `/api/sync-runs` | Recent sync outcomes and counters |
@@ -649,7 +651,7 @@ A previous Prime Video subscription and buy/rent workload serving millions of cu
 
 ## 12. Verification
 
-The backend suite completed with **66 tests and 438 assertions**. Laravel formatting and the React production build also completed successfully.
+The backend suite completed with **67 tests and 443 assertions**. Laravel formatting and the React production build also completed successfully.
 
 Test groups:
 

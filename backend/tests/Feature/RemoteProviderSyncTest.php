@@ -78,6 +78,33 @@ final class RemoteProviderSyncTest extends InventoryTestCase
         }
     }
 
+    public function test_provider_reconciliation_retries_outbox_before_fetching_snapshot(): void
+    {
+        $calls = [];
+        Http::fake(function (ClientRequest $request) use (&$calls) {
+            if ($request->method() === 'POST' && str_ends_with($request->url(), '/api/provider/outbox/retry')) {
+                $calls[] = 'outbox';
+
+                return Http::response(['published' => 2, 'failed' => 0, 'pending' => 1]);
+            }
+            if ($request->method() === 'GET' && str_ends_with($request->url(), '/api/provider/snapshot')) {
+                $calls[] = 'snapshot';
+
+                return Http::response($this->snapshot([$this->envelope()], 1));
+            }
+
+            return Http::response(['message' => 'Unexpected provider request.'], 500);
+        });
+
+        $run = app(JamfSyncService::class)->reconcileProvider();
+
+        $this->assertSame(['outbox', 'snapshot'], $calls);
+        $this->assertSame(2, $run->counters['outbox_published']);
+        $this->assertSame(0, $run->counters['outbox_failed']);
+        $this->assertSame(1, $run->counters['outbox_pending']);
+        $this->assertDatabaseHas('assets', ['provider_device_id' => '101']);
+    }
+
     public function test_provider_lab_changes_provider_before_explicit_inventory_sync(): void
     {
         $state = null;
@@ -85,7 +112,9 @@ final class RemoteProviderSyncTest extends InventoryTestCase
         $generation = 0;
         Http::fake(function (ClientRequest $request) use (&$state, &$version, &$generation) {
             $url = $request->url();
-            if ($request->method() === 'POST' && str_ends_with($url, '/api/provider/devices')) {
+            if ($request->method() === 'POST' && str_ends_with($url, '/api/provider/outbox/retry')) {
+                return Http::response(['published' => 1, 'failed' => 0, 'pending' => 0]);
+            } elseif ($request->method() === 'POST' && str_ends_with($url, '/api/provider/devices')) {
                 $device = $request->data();
                 $version = $generation = 1;
                 $state = [
@@ -212,6 +241,7 @@ final class RemoteProviderSyncTest extends InventoryTestCase
         $removed = $this->envelope(3, 3, 'device.removed');
         Http::fake([
             'provider.test/api/provider/import' => Http::response($this->snapshot([$base], 1)),
+            'provider.test/api/provider/outbox/retry' => Http::response(['published' => 0, 'failed' => 0, 'pending' => 0]),
             'provider.test/api/provider/snapshot' => Http::response($this->snapshot([$removed], 3)),
         ]);
         app(JamfSyncService::class)->full();
@@ -229,6 +259,7 @@ final class RemoteProviderSyncTest extends InventoryTestCase
     {
         Http::fake([
             'provider.test/api/provider/import' => Http::response($this->snapshot([$this->envelope(4, 9, ram: 64)], 9)),
+            'provider.test/api/provider/outbox/retry' => Http::response(['published' => 0, 'failed' => 0, 'pending' => 0]),
             'provider.test/api/provider/snapshot' => Http::response($this->snapshot([], 8)),
         ]);
         app(JamfSyncService::class)->full();
@@ -247,6 +278,7 @@ final class RemoteProviderSyncTest extends InventoryTestCase
     {
         Http::fake([
             'provider.test/api/provider/import' => Http::response($this->snapshot([$this->envelope(2, 2)], 2)),
+            'provider.test/api/provider/outbox/retry' => Http::response(['published' => 0, 'failed' => 0, 'pending' => 0]),
             'provider.test/api/provider/snapshot' => Http::response($this->snapshot([$this->envelope(2, 2, ram: 64)], 2)),
         ]);
         app(JamfSyncService::class)->full();

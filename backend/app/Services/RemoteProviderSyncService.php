@@ -25,6 +25,10 @@ final class RemoteProviderSyncService
 
     public function reconcile(array &$counts): void
     {
+        $delivery = $this->provider->retryOutbox();
+        $counts['outbox_published'] = (int) ($delivery['published'] ?? 0);
+        $counts['outbox_failed'] = (int) ($delivery['failed'] ?? 0);
+        $counts['outbox_pending'] = (int) ($delivery['pending'] ?? 0);
         $this->applySnapshot($this->provider->envelopesSnapshot(), $counts);
     }
 
