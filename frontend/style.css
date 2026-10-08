@@ -81,6 +81,14 @@ th {
   color: #566079;
   font-size: 14px;
 }
+.detail-row > td {
+  padding: 0 16px 16px;
+  background: #f8faff;
+}
+.detail-row section {
+  margin: 0;
+  border-color: #b9c9ef;
+}
 code {
   font-size: 13px;
 }

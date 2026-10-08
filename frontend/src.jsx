@@ -1,12 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import {
-  AssetList,
-  EmployeeList,
-  AssetDetails,
-  Activity,
-  Testing,
-} from "./views.jsx";
+import { AssetList, EmployeeList, Activity, Testing } from "./views.jsx";
 import "./style.css";
 
 async function request(path, options = {}) {
@@ -25,7 +19,8 @@ function App() {
   const [employees, setEmployees] = useState([]);
   const [events, setEvents] = useState([]);
   const [runs, setRuns] = useState([]);
-  const [outbox, setOutbox] = useState({ data: [], pending: 0 });
+  const [deletedAssets, setDeletedAssets] = useState([]);
+  const [outbox, setOutbox] = useState({ pending: 0 });
   const [page, setPage] = useState(1);
   const [lastPage, setLastPage] = useState(1);
   const [detail, setDetail] = useState(null);
@@ -34,13 +29,13 @@ function App() {
   const [notice, setNotice] = useState("");
 
   async function refresh(p = page) {
-    const [a, e, v, r, o] = await Promise.all([
+    const [a, e, v, r, d, o] = await Promise.all([
       request("/assets?page=" + p),
       request("/employees"),
       request("/events"),
       request("/sync-runs"),
+      request("/deleted-assets"),
       request("/provider-outbox").catch((error) => ({
-        data: [],
         unavailable: error.message,
       })),
     ]);
@@ -53,11 +48,12 @@ function App() {
     setEmployees(e.data);
     setEvents(v.data);
     setRuns(r.data);
+    setDeletedAssets(d.data);
     setOutbox(o);
   }
   useEffect(() => {
     refresh().catch((e) => setError(e.message));
-  }, [page]);
+  }, [page, tab]);
 
   async function action(fn) {
     setBusy(true);
@@ -71,11 +67,9 @@ function App() {
       setBusy(false);
     }
   }
-  async function sync(mode = "provider") {
+  async function sync() {
     await action(async () => {
-      const r = await request(mode === "file" ? "/sync" : "/sync/provider", {
-        method: "POST",
-      });
+      const r = await request("/sync/provider", { method: "POST" });
       const c = r.counters;
       setNotice(
         `Sync complete: ${c.created_assets} created, ${c.updated_assets} updated, ${c.unchanged_assets} unchanged, ${c.removed_assets} removed. ${c.warnings.length} warnings.`,
@@ -100,14 +94,6 @@ function App() {
       setTab("assets");
     });
   }
-  async function sendEvent() {
-    await action(async () => {
-      const result = await request("/simulator/jamf", { method: "POST" });
-      setNotice(
-        `${result.emitted} state notifications queued. Timestamp-only changes are ignored. Refresh activity after the worker processes them.`,
-      );
-    });
-  }
   return (
     <main>
       <header>
@@ -119,7 +105,7 @@ function App() {
             Mock-data controls are available under Testing.
           </p>
         </div>
-        <button disabled={busy} onClick={() => sync("provider")}>
+        <button disabled={busy} onClick={sync}>
           {busy ? "Working…" : "Sync Now"}
         </button>
       </header>
@@ -149,9 +135,11 @@ function App() {
         <>
           <AssetList
             assets={assets}
+            detail={detail}
             busy={busy}
             onDetails={showDetails}
             onDelete={(id) => remove("assets", id)}
+            onCloseDetails={() => setDetail(null)}
           />
           <div className="controls">
             <button
@@ -170,9 +158,6 @@ function App() {
               Next
             </button>
           </div>
-          {detail && (
-            <AssetDetails asset={detail} onClose={() => setDetail(null)} />
-          )}
         </>
       )}
       {tab === "employees" && (
@@ -197,25 +182,35 @@ function App() {
             })
           }
           busy={busy}
-          onRefresh={() => action(() => refresh())}
         />
       )}
       {tab === "testing" && (
         <Testing
+          deletedAssets={deletedAssets}
           events={events}
           runs={runs}
           busy={busy}
-          onImport={() => sync("file")}
-          onScan={sendEvent}
-          onRestore={() =>
+          onReset={() =>
             action(async () => {
-              const r = await request("/restorations", { method: "POST" });
+              const result = await request("/demo/reset", { method: "POST" });
+              setDetail(null);
+              setPage(1);
               setNotice(
-                `Restoration complete: ${r.counters.created_assets} assets recreated.`,
+                `Demo reset with ${result.provider_devices} provider devices. Click Sync Now to fetch them.`,
               );
             })
           }
-          onRefresh={() => action(() => refresh())}
+          onKafkaFailure={() =>
+            action(async () => {
+              const result = await request("/demo/kafka-failure", {
+                method: "POST",
+              });
+              setNotice(
+                `${result.affected} notification could not reach Kafka; ${result.pending} total waiting for recovery.`,
+              );
+              setTab("activity");
+            })
+          }
           onRetry={(id) =>
             action(() =>
               request("/events/" + id + "/retry", { method: "POST" }),

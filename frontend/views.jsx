@@ -1,6 +1,13 @@
 import React from "react";
 
-export function AssetList({ assets, busy, onDetails, onDelete }) {
+export function AssetList({
+  assets,
+  detail,
+  busy,
+  onDetails,
+  onDelete,
+  onCloseDetails,
+}) {
   return (
     <>
       <h2>Assets</h2>
@@ -17,28 +24,37 @@ export function AssetList({ assets, busy, onDetails, onDelete }) {
           </thead>
           <tbody>
             {assets.map((a) => (
-              <tr key={a.id}>
-                <td>
-                  <strong>{a.device_name}</strong>
-                  <br />
-                  <code>{a.serial_code}</code>
-                </td>
-                <td>{a.device_model?.model_name || "Unknown"}</td>
-                <td>{a.specifications?.ram_gb ?? "—"} GiB</td>
-                <td>
-                  {a.employee?.deleted_at
-                    ? `Deleted user (${a.employee.email})`
-                    : a.employee?.email || "Unassigned"}
-                </td>
-                <td>
-                  <button disabled={busy} onClick={() => onDetails(a.id)}>
-                    Details
-                  </button>
-                  <button disabled={busy} onClick={() => onDelete(a.id)}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
+              <React.Fragment key={a.id}>
+                <tr>
+                  <td>
+                    <strong>{a.device_name}</strong>
+                    <br />
+                    <code>{a.serial_code}</code>
+                  </td>
+                  <td>{a.device_model?.model_name || "Unknown"}</td>
+                  <td>{a.specifications?.ram_gb ?? "—"} GiB</td>
+                  <td>
+                    {a.employee?.deleted_at
+                      ? `Deleted user (${a.employee.email})`
+                      : a.employee?.email || "Unassigned"}
+                  </td>
+                  <td>
+                    <button disabled={busy} onClick={() => onDetails(a.id)}>
+                      Details
+                    </button>
+                    <button disabled={busy} onClick={() => onDelete(a.id)}>
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+                {detail?.id === a.id && (
+                  <tr className="detail-row">
+                    <td colSpan="5">
+                      <AssetDetails asset={detail} onClose={onCloseDetails} />
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
             ))}
           </tbody>
         </table>
@@ -133,7 +149,7 @@ export function AssetDetails({ asset, onClose }) {
   );
 }
 
-export function Activity({ outbox, onRetryDelivery, busy, onRefresh }) {
+export function Activity({ outbox, onRetryDelivery, busy }) {
   return (
     <>
       <h2>Notification delivery</h2>
@@ -159,67 +175,76 @@ export function Activity({ outbox, onRetryDelivery, busy, onRefresh }) {
           </button>
         </section>
       )}
-      <button disabled={busy} onClick={onRefresh}>
-        Refresh status
-      </button>
     </>
   );
 }
 
 export function Testing({
+  deletedAssets,
   events,
   runs,
   busy,
-  onImport,
-  onScan,
-  onRestore,
-  onRefresh,
+  onReset,
+  onKafkaFailure,
   onRetry,
 }) {
   return (
     <>
       <h2>Testing tools</h2>
       <p>
-        These controls exercise the supplied mock JSON and recovery workflows.
-        Normal provider changes use the provider API, outbox and Kafka.
+        These controls reset the local demonstration and show how a persisted
+        notification recovers after Kafka is unavailable.
       </p>
       <div className="testing-grid">
         <section>
-          <h3>Reload the supplied response</h3>
+          <h3>Reset the demonstration</h3>
           <p>
-            Treat the JSON file as a complete provider snapshot. This can
-            replace changes previously made through the mock provider API.
+            Reload the supplied JSON into the mock provider and clear the local
+            inventory. Then use Sync Now to fetch the provider snapshot.
           </p>
-          <button disabled={busy} onClick={onImport}>
-            Import source JSON
+          <button disabled={busy} onClick={onReset}>
+            Reset demo
           </button>
         </section>
         <section>
-          <h3>Detect mock-file changes</h3>
+          <h3>Test Kafka recovery</h3>
           <p>
-            Compare the JSON file with provider state and queue only meaningful
-            changes. Report-date-only changes are ignored.
+            Change one provider device and simulate a failed Kafka delivery.
+            Activity will show how many notifications are waiting.
           </p>
-          <button disabled={busy} onClick={onScan}>
-            Scan JSON and queue changes
-          </button>
-        </section>
-        <section>
-          <h3>Restore local deletions</h3>
-          <p>
-            Look up locally deleted assets by provider ID and restore those that
-            still exist and remain assigned.
-          </p>
-          <button disabled={busy} onClick={onRestore}>
-            Restore locally deleted assets
+          <button disabled={busy} onClick={onKafkaFailure}>
+            Simulate Kafka failure
           </button>
         </section>
       </div>
-      <div className="controls">
-        <button disabled={busy} onClick={onRefresh}>
-          Refresh test results
-        </button>
-      </div>
+      <h3>Locally deleted devices</h3>
+      {!deletedAssets.length && <p>No locally deleted devices.</p>}
+      {deletedAssets.length > 0 && (
+        <div className="table">
+          <table>
+            <thead>
+              <tr>
+                <th>Device / serial</th>
+                <th>Provider device ID</th>
+                <th>Deleted at</th>
+              </tr>
+            </thead>
+            <tbody>
+              {deletedAssets.map((asset) => (
+                <tr key={`${asset.provider}-${asset.serial_code}`}>
+                  <td>
+                    <strong>{asset.device_name || "Unknown device"}</strong>
+                    <br />
+                    <code>{asset.serial_code}</code>
+                  </td>
+                  <td>{asset.provider_device_id || "Unknown"}</td>
+                  <td>{asset.deleted_at}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       <h3>Inventory event processing</h3>
       {!events.length && <p>No notifications yet.</p>}
       {events.map((e) => (
