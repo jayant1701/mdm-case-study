@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Contracts\DeviceProvider;
+use App\Contracts\Persistence\EventInboxRepository;
 use App\Data\DeviceEvent;
 use App\Jobs\ProcessDeviceEvent;
 use App\Models\Asset;
@@ -205,9 +206,44 @@ class EventSyncTest extends InventoryTestCase
         $this->assertSame(7, app(EventReceiver::class)->recover());
         Queue::assertPushed(ProcessDeviceEvent::class);
         $before = SimulatedProviderDevice::pluck('version', 'provider_device_id')->all();
-        file_put_contents($this->fixture,'broken');
+        file_put_contents($this->fixture, 'broken');
         $this->postJson('/api/simulator/jamf')->assertStatus(422);
-        $this->assertSame($before,SimulatedProviderDevice::pluck('version','provider_device_id')->all());
-        $this->assertDatabaseCount('event_inboxes',7);
+        $this->assertSame($before, SimulatedProviderDevice::pluck('version', 'provider_device_id')->all());
+        $this->assertDatabaseCount('event_inboxes', 7);
+    }
+
+    public function test_producer_baseline_and_outbox_roll_back_together_on_injected_storage_failure(): void
+    {
+        Queue::fake();
+        $actual = app(EventInboxRepository::class);
+        $substitute = Mockery::mock(EventInboxRepository::class);
+        $substitute->shouldReceive('findByEventId')->andReturnNull();
+        $substitute->shouldReceive('findDeviceVersion')->andReturnNull();
+        $substitute->shouldReceive('recordNotification')->once()->andReturnUsing(function ($provider, $payload) use ($actual) {
+            $actual->recordNotification($provider, $payload);
+            throw new \RuntimeException('Simulated outbox persistence failure.');
+        });
+        $this->app->instance(EventInboxRepository::class, $substitute);
+        $this->postJson('/api/simulator/jamf')->assertStatus(422);
+        $this->assertDatabaseCount('simulated_provider_devices', 0);
+        $this->assertDatabaseCount('event_inboxes', 0);
+        $this->assertDatabaseHas('simulator_generations', ['provider' => 'jamf', 'generation' => 0]);
+    }
+
+    public function test_removal_cannot_delete_an_asset_with_a_different_serial(): void
+    {
+        Queue::fake();
+        $this->sync();
+        $payload = $this->notification(type: 'device.removed');
+        $payload['device']['serial_code'] = 'WRONG-SERIAL';
+        $event = app(EventReceiver::class)->accept($payload);
+        try {
+            $this->process($event);
+            $this->fail('Expected serial identity conflict.');
+        } catch (\RuntimeException $error) {
+            $this->assertStringContainsString('serial', $error->getMessage());
+        }
+        $this->assertDatabaseCount('assets', 7);
+        $this->assertSame('failed', $event->fresh()->status);
     }
 }

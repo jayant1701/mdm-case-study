@@ -63,6 +63,14 @@ final class PersistenceBoundaryTest extends InventoryTestCase
         $this->assertSame('failed', EventInbox::find($inbox->id)->status);
         $this->assertSame(1, EventInbox::find($inbox->id)->attempts);
         $this->assertDatabaseHas('sync_runs', ['mode' => 'event', 'status' => 'failed']);
+        $this->assertDatabaseHas('device_event_states', ['provider_device_id' => '101', 'version' => 1]);
+        $this->app->instance(EventInboxRepository::class, $actual);
+        file_put_contents($this->fixture, 'broken');
+        app(EventReceiver::class)->retry($inbox->id);
+        (new ProcessDeviceEvent($inbox->id))->handle(app(EventProcessor::class));
+        $this->assertSame(64.0, Asset::where('provider_device_id', '101')->first()->specifications->ram_gb);
+        $this->assertSame('succeeded', EventInbox::find($inbox->id)->status);
+        $this->assertDatabaseHas('device_event_states', ['provider_device_id' => '101', 'version' => 2]);
     }
 
     public function test_missing_provider_lock_fails_closed_before_inventory_writes(): void

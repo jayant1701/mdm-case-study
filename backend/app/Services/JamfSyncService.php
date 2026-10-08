@@ -31,6 +31,7 @@ final class JamfSyncService
     public function applyEvent(DeviceEvent $event): SyncRun
     {
         return $this->run('event', function (array &$counts) use ($event) {
+            $this->reconciler->validateIdentities([$event->device]);
             if ($event->state() === 'removed') {
                 $this->reconciler->removeProviderDevice($event->device->providerId, $counts);
             } else {
