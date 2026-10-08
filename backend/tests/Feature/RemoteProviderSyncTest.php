@@ -78,7 +78,7 @@ final class RemoteProviderSyncTest extends InventoryTestCase
         }
     }
 
-    public function test_provider_lab_create_update_and_remove_return_actual_sync_counters(): void
+    public function test_provider_lab_changes_provider_before_explicit_inventory_sync(): void
     {
         $state = null;
         $version = 0;
@@ -141,21 +141,31 @@ final class RemoteProviderSyncTest extends InventoryTestCase
             'employee_name' => 'Lab Employee',
             'ram_gb' => 16,
         ])->assertOk()->json();
-        $this->assertSame(1, $created['sync']['counters']['created_assets']);
         $this->assertSame('device.added', $created['provider_event']);
+        $this->assertArrayNotHasKey('sync', $created);
+        $this->assertDatabaseMissing('assets', ['provider_device_id' => 'lab-1']);
+
+        $createdSync = $this->postJson('/api/sync/provider')->assertOk()->json();
+        $this->assertSame(1, $createdSync['counters']['created_assets']);
         $this->assertDatabaseHas('assets', ['provider_device_id' => 'lab-1', 'device_name' => 'Provider Lab MacBook']);
 
         $updated = $this->patchJson('/api/demo/provider-devices/lab-1', [
             'device_name' => 'Provider Lab MacBook Updated',
             'ram_gb' => 32,
         ])->assertOk()->json();
-        $this->assertSame(1, $updated['sync']['counters']['updated_assets']);
         $this->assertSame('device.changed', $updated['provider_event']);
+        $this->assertDatabaseHas('assets', ['provider_device_id' => 'lab-1', 'device_name' => 'Provider Lab MacBook']);
+
+        $updatedSync = $this->postJson('/api/sync/provider')->assertOk()->json();
+        $this->assertSame(1, $updatedSync['counters']['updated_assets']);
         $this->assertSame(32.0, (float) Asset::where('provider_device_id', 'lab-1')->firstOrFail()->specifications->ram_gb);
 
         $removed = $this->deleteJson('/api/demo/provider-devices/lab-1')->assertOk()->json();
-        $this->assertSame(1, $removed['sync']['counters']['removed_assets']);
         $this->assertSame('device.removed', $removed['provider_event']);
+        $this->assertDatabaseHas('assets', ['provider_device_id' => 'lab-1']);
+
+        $removedSync = $this->postJson('/api/sync/provider')->assertOk()->json();
+        $this->assertSame(1, $removedSync['counters']['removed_assets']);
         $this->assertDatabaseMissing('assets', ['provider_device_id' => 'lab-1']);
         $this->assertNoProducerWrites();
     }

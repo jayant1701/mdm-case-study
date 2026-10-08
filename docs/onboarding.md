@@ -100,7 +100,7 @@ Bindings are registered in `AppServiceProvider`. Services depend on contracts wh
 | `RemoteProviderSyncService` | Reconcile versioned provider HTTP snapshots and targeted lookups |
 | `DeviceReconciler` | Apply normalized device state to employees, models, assets and attributes |
 | `AssetDeletionService` | Local-only asset and employee deletion policies |
-| `DemoControlService` | Reset/failure demonstrations and Provider Lab mutation-plus-reconciliation |
+| `DemoControlService` | Reset/failure demonstrations and provider-only Provider Lab mutations |
 
 ## Data movement
 
@@ -141,11 +141,15 @@ Testing form
   -> local/testing inventory demo endpoint
   -> RemoteProviderGateway create/patch/delete
   -> normal provider transaction and outbox event
-  -> immediate real provider reconciliation
-  -> displayed created/updated/removed counters
+  -> display provider change and prompt for Sync Now
+
+Sync Now
+  -> provider snapshot
+  -> inventory reconciliation
+  -> refreshed Assets and Employees views
 ```
 
-The provider mutation commits before reconciliation. If reconciliation fails, provider state remains changed and Sync Now can retry. The normal event is still published; version checkpoints prevent it from reversing the reconciled state.
+Provider Lab does not call inventory reconciliation or refresh inventory data. The provider mutation still creates the normal durable outbox event, so the event pipeline remains active in the background. Sync Now explicitly fetches the provider snapshot and refreshes the visible inventory; version checkpoints prevent delayed delivery from reversing newer state.
 
 ## Database ownership
 

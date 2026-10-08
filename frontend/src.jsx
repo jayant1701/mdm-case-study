@@ -97,7 +97,9 @@ function App() {
     });
   }
   async function changeProvider(method, providerId, payload) {
-    await action(async () => {
+    setBusy(true);
+    setError("");
+    try {
       const path =
         "/demo/provider-devices" +
         (providerId ? "/" + encodeURIComponent(providerId) : "");
@@ -106,11 +108,19 @@ function App() {
         body: payload ? JSON.stringify(payload) : undefined,
       });
       setProviderResult(result);
-      const counters = result.sync.counters;
+      const completedAction = {
+        create: "created",
+        update: "updated",
+        remove: "removed",
+      }[result.action];
       setNotice(
-        `Provider ${result.action} reconciled: ${counters.created_assets} created, ${counters.updated_assets} updated, ${counters.removed_assets} removed and ${counters.unchanged_assets} unchanged.`,
+        `Provider device ${completedAction}. Click Sync Now to refresh the inventory from the provider.`,
       );
-    });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
   }
   return (
     <main>

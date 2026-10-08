@@ -367,7 +367,6 @@ function ProviderLab({ busy, result, onCreate, onUpdate, onRemove }) {
     ram_gb: "32",
   });
   const [removeId, setRemoveId] = useState("demo-asset-001");
-  const counters = result?.sync?.counters;
 
   function field(state, setState, key) {
     return {
@@ -380,9 +379,9 @@ function ProviderLab({ busy, result, onCreate, onUpdate, onRemove }) {
     <>
       <h3>Provider Lab</h3>
       <p>
-        Change the mock provider through its HTTP adapter, then run real
-        reconciliation and show the resulting inventory counters. Create the
-        demo device before removing its default ID.
+        Change the mock provider through its HTTP adapter. These forms do not
+        run inventory reconciliation. Click Sync Now after a provider change to
+        fetch the new provider state.
       </p>
       <div className="provider-lab-grid">
         <form
@@ -430,7 +429,7 @@ function ProviderLab({ busy, result, onCreate, onUpdate, onRemove }) {
             />
           </label>
           <button disabled={busy} type="submit">
-            Create and sync
+            Create in provider
           </button>
         </form>
         <form
@@ -466,7 +465,7 @@ function ProviderLab({ busy, result, onCreate, onUpdate, onRemove }) {
             />
           </label>
           <button disabled={busy} type="submit">
-            Update and sync
+            Update in provider
           </button>
         </form>
         <form
@@ -485,37 +484,24 @@ function ProviderLab({ busy, result, onCreate, onUpdate, onRemove }) {
             />
           </label>
           <p>
-            This removes the device from the mock provider and reconciliation
-            removes its local asset.
+            This removes the device from the mock provider. Click Sync Now to
+            remove its local asset.
           </p>
           <button disabled={busy} type="submit">
-            Remove and sync
+            Remove from provider
           </button>
         </form>
       </div>
-      {result && counters && (
+      {result && (
         <section className="provider-result" role="status">
-          <h4>Last Provider Lab result</h4>
+          <h4>Last provider change</h4>
           <p>
             {result.action} · provider device {result.provider_device_id} ·{" "}
             {result.provider_event} · {result.notifications_created}{" "}
             notification
             {result.notifications_created === 1 ? "" : "s"} created
           </p>
-          <div className="counter-grid">
-            <span>
-              <strong>{counters.created_assets}</strong> created
-            </span>
-            <span>
-              <strong>{counters.updated_assets}</strong> updated
-            </span>
-            <span>
-              <strong>{counters.removed_assets}</strong> removed
-            </span>
-            <span>
-              <strong>{counters.unchanged_assets}</strong> unchanged
-            </span>
-          </div>
+          <p>Click Sync Now to reconcile this provider change.</p>
         </section>
       )}
     </>

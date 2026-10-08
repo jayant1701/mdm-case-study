@@ -7,7 +7,7 @@ use App\Contracts\RemoteProviderGateway;
 
 final class DemoControlService
 {
-    public function __construct(private RemoteProviderGateway $provider, private DemoStateRepository $state, private JamfSyncService $sync) {}
+    public function __construct(private RemoteProviderGateway $provider, private DemoStateRepository $state) {}
 
     public function reset(): array
     {
@@ -34,7 +34,7 @@ final class DemoControlService
             'specifications' => ['ram_gb' => (float) $input['ram_gb'], 'storage_gb' => null, 'processor_type' => null, 'core_count' => null, 'battery_capacity_percent' => null],
         ]);
 
-        return $this->reconcileChange('create', $change);
+        return $this->providerChange('create', $change);
     }
 
     public function updateProviderDevice(string $providerId, array $input): array
@@ -44,18 +44,16 @@ final class DemoControlService
             'specifications' => ['ram_gb' => (float) $input['ram_gb']],
         ]);
 
-        return $this->reconcileChange('update', $change);
+        return $this->providerChange('update', $change);
     }
 
     public function removeProviderDevice(string $providerId): array
     {
-        return $this->reconcileChange('remove', $this->provider->delete($providerId));
+        return $this->providerChange('remove', $this->provider->delete($providerId));
     }
 
-    private function reconcileChange(string $action, array $change): array
+    private function providerChange(string $action, array $change): array
     {
-        $run = $this->sync->reconcileProvider();
-
         return [
             'action' => $action,
             'provider_device_id' => data_get($change, 'device.provider_device_id'),
@@ -65,11 +63,6 @@ final class DemoControlService
                 'remove' => 'device.removed',
             },
             'notifications_created' => count($change['event_ids'] ?? []),
-            'sync' => [
-                'id' => $run->id,
-                'status' => $run->status,
-                'counters' => $run->counters,
-            ],
         ];
     }
 }
