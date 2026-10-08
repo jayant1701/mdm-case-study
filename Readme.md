@@ -10,7 +10,7 @@ With Docker Desktop's engine running, from this repository:
 docker compose up --build
 ```
 
-Open http://localhost:5173. **Sync Now** imports the supplied fixture: **7 assets and 6 employees**. Backend API: http://localhost:8000/api/assets. Compose starts frontend, backend, MySQL and a database queue worker, applies migrations automatically, and persists MySQL in a named volume. Ports bind to localhost. Development credentials are only for this local demo.
+Open http://localhost:5173. **Sync Now** reconciles the current provider store, seeded once from the supplied fixture: **7 assets and 6 employees**. Backend API: http://localhost:8000/api/assets. Compose starts frontend, backend, MySQL and a database queue worker, applies migrations automatically, and persists MySQL in a named volume. Ports bind to localhost. Development credentials are only for this local demo.
 
 Stop with `docker compose down`. Reset with `docker compose down -v` (deletes the database volume). Original assignment: [docs/assignment.md](docs/assignment.md). Final architecture, models, assumptions and ordering contract: [docs/design.md](docs/design.md).
 
@@ -25,7 +25,7 @@ Unchanged scans emit zero events. Changes only to `general.lastContactTime` or `
 
 Without an initial full sync, the first simulation emits seven additions. After full sync, unchanged simulation emits zero. New/edited/unassigned/removed/reappearing devices produce the corresponding lifecycle notifications. Removal includes last-known complete device state. The simulator requires source serial and provider ID to avoid inventing removals from identity gaps.
 
-Local asset deletion records an independent restore task and removes its attributes. **Restore locally deleted assets** fetches the current file and targets those identities. Local deletion does not change the producer baseline, so unchanged scans do not restore it; full sync or targeted restoration does. Employee deletion leaves linked assets temporarily unassigned until sync.
+Local asset deletion records an independent restore task and removes its attributes. **Restore locally deleted assets** performs indexed provider-ID lookup without reading or scanning the source file and fences older queued notifications, including removed/unassigned states. Local deletion does not change the producer baseline, so unchanged scans do not restore it; full sync or targeted restoration does. Employee deletion retains a minimal ID/email tombstone and asset links; assets show Deleted user with the email. Source reconciliation restores the same employee identity.
 
 ## Notification contract
 
@@ -60,7 +60,7 @@ Consumer watermarks survive asset deletion. Older versions/generations are ignor
 
 Services depend on repository interfaces; Eloquent implementations own queries/writes. AssetRepository owns assets and specifications as one aggregate. TransactionBoundary and ProviderLockRepository retain a transaction-scoped permanent row lock across full sync, notification receipt, worker processing and local deletion. No TTL expires midway. Contracts return Eloquent/Laravel data records pragmatically; this is not a completely framework-independent domain layer. Schema remains in `backend/database/migrations`.
 
-Policy choices are documented, not waiting for approval: employee deletion retains unassigned assets; source unassignment or absence removes local assets but retains employees. Absence removals require a validated complete snapshot. Explicit null clears mapped nullable values; missing optional fields preserve during full sync where supported. Event payloads carry complete state. Identity conflicts/invalid nonempty emails fail safely. Shared metadata resolves deterministically in the snapshot adapter. Report date is provenance; purchase date cannot detect later updates. RAM uses MB / 1024, labeled GiB; missing storage is unknown.
+Policy choices are documented, not waiting for approval: employee deletion retains linked assets and a minimal identity tombstone; source unassignment or absence removes local assets but retains employees. Absence removals require a validated complete snapshot. Explicit null clears mapped nullable values; missing optional fields preserve during full sync where supported. Event payloads carry complete state. Identity conflicts/invalid nonempty emails fail safely. Shared metadata resolves deterministically in the snapshot adapter. Report date is provenance; purchase date cannot detect later updates. RAM uses MB / 1024, labeled GiB; missing storage is unknown.
 
 ## APIs
 
@@ -69,7 +69,10 @@ Policy choices are documented, not waiting for approval: employee deletion retai
 | GET | `/api/assets`, `/api/assets/{id}` | Paginated list and details |
 | GET | `/api/employees` | Employees and asset links |
 | DELETE | `/api/assets/{id}`, `/api/employees/{id}` | Local deletion |
-| POST | `/api/sync` | Complete direct-file reconciliation and event fences |
+| POST | `/api/sync` | Explicit complete JSON import; replaces current provider state |
+| POST | `/api/sync/provider` | Sync Now: reconcile current provider state |
+| GET / POST / PATCH / DELETE | `/api/provider/jamf/devices/{providerId}` | Indexed lookup / create (collection URL) / update / removal |
+| POST | `/api/provider/jamf/seed` | Seed once; does not reset existing provider state |
 | GET | `/api/sync-runs` | Latest runs |
 | POST | `/api/restorations` | Independent local-delete restoration |
 | POST | `/api/simulator/jamf` | Scan semantic differences and queue complete state |
@@ -79,7 +82,7 @@ Policy choices are documented, not waiting for approval: employee deletion retai
 
 ## Verification
 
-Portable PHP suite: **25 tests / 136 assertions passed**. It covers full import/repeat/RAM/reassignment/identity/deletion rules; direct worker payload processing with a broken source file and no provider calls; ignored timestamps; same-timestamp real changes; stale/duplicate/version conflicts; removal/unassignment/readdition tombstones; shared metadata ordering; full-sync fencing; atomic producer baseline/outbox rollback; inbox acknowledgment rollback and source-free retry; restoration and missing lock protection. React production build passes.
+Portable PHP suite: **34 tests / 230 assertions passed**. It covers full import/repeat/RAM/reassignment/identity/deletion rules; direct worker payload processing with a broken source file and no provider calls; ignored timestamps; same-timestamp real changes; stale/duplicate/version conflicts; removal/unassignment/readdition tombstones; shared metadata ordering; full-sync fencing; atomic producer baseline/outbox rollback; inbox acknowledgment rollback and source-free retry; restoration and missing lock protection. React production build passes.
 
 Earlier Docker/MySQL verification established startup, migrations, required inventory flows, and real queue processing. The final payload upgrade's integration results are recorded separately in the delivery report. SQLite tests alone do not establish MySQL locking behavior.
 
@@ -88,3 +91,9 @@ Local tests: `cd backend`, `composer install`, `php vendor/phpunit/phpunit/phpun
 ## Boundaries
 
 No real Jamf connectivity, webhook authentication, Kafka, serverless deployment, tenant scoping, automatic periodic reconciliation or GitHub publishing is claimed. The simulator reads the full local file; its worker does not. A real provider would need verified complete-payload semantics and reliable sequence numbers, or a different adapter/fallback strategy. Legacy ID-only notifications are no longer accepted; old pending legacy rows fail visibly rather than fetching implicitly. Hard process termination may leave historical sync runs in progress; production cleanup/monitoring remains future work.
+
+## Mock provider boundary
+
+The mock provider is a separate logical source store hosted in the same Laravel process and MySQL database for this Docker demonstration. Its CRUD transaction stores current source state and durable notifications atomically. It does not modify real Jamf. GET returns the versioned normalized envelope above; POST to `/api/provider/jamf/devices` accepts its `device` object. PATCH accepts partial normalized state, for example `{"specifications":{"ram_gb":64}}`; DELETE queues a retained-state removal. Serial identity cannot change. Missing fields preserve previous values; explicit null clears supported nullable fields.
+
+**Sync Now** uses current provider state. **Import source JSON** explicitly reloads the supplied file and can overwrite provider API changes. Editing a mounted JSON file has no effect on indexed GET until a source scan/import runs. Activity source scans remain available to simulate bulk file changes. Initial seed fills an empty provider store without resetting it at every restart; upgrades with an existing simulator baseline backfill the store without duplicate events.

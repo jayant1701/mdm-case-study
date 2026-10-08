@@ -29,7 +29,7 @@ The worker does not connect to the provider/file. Controllers validate HTTP boun
 
 | Entity | Key fields and purpose |
 |---|---|
-| Employee | Internal ID; normalized unique email; name/phone |
+| Employee | Internal ID; normalized unique email; name/phone; deletion timestamp |
 | DeviceModel | Shared manufacturer + model identifier uniqueness; model name |
 | Asset | Internal ID; unique serial; nullable employee/model FKs; device name, provider/device ID, purchase and report provenance |
 | AssetAttributes | Unique asset FK with cascade; individual RAM/storage/processor/cores/battery |
@@ -37,6 +37,7 @@ The worker does not connect to the provider/file. Controllers validate HTTP boun
 | RestoreTask | Source identity and deleted time retained independently; pending/restored/missing/unassigned outcome |
 | EventInbox | Unique event ID and provider/device/version; complete payload, content hash, generation, status/attempts/outcome |
 | SimulatedProviderDevice | Durable per-device source baseline, semantic fingerprint, version/generation, last complete state, removal tombstone |
+| MockProviderDevice | Separate source-store provider identity, serial, complete device JSON and lifecycle state |
 | DeviceEventState | Applied per-device version/generation and state; survives asset deletion |
 | SharedEventState | Employee/model identity, latest generation and metadata fingerprint |
 | SimulatorGeneration | Monotonic provider-wide producer generation |
@@ -53,7 +54,7 @@ No employee-assets join table is required for one current assignee. History and 
 
 ## Provider and event contracts
 
-DeviceProvider exposes complete snapshot and targeted identity lookup for future adapters. JamfMockProvider validates the envelope and maps to DeviceRecord. Full sync/restoration use it; queued payload processing does not.
+DeviceProvider exposes complete snapshot and targeted identity lookup for future adapters. JamfMockProvider validates the envelope and maps to DeviceRecord. Explicit file import uses it. TargetedDeviceProvider is bound to MockProviderAdapter for indexed current-state lookup and provider reconciliation; queued payload processing uses neither adapter.
 
 DeviceEvent contains event ID, provider-device ID, positive per-device version, producer_generation, lifecycle type and complete normalized device state. Complete state includes serial, nullable email, employee metadata, nullable shared model, asset metadata and specifications. All mapped keys must be present, with explicit nulls. Report date travels as provenance when a semantic change emits.
 
@@ -78,7 +79,7 @@ TransactionBoundary uses the same database connection and permanent lock row for
 ## Chosen sync policies
 
 - Only assigned source devices are imported. Existing unassigned or missing devices are removed locally after a validated complete snapshot; employees remain.
-- Employee deletion sets related assets' employee FK null. Full sync recreates the employee and assignment.
+- Employee deletion retains ID/email and asset links as a tombstone. Source reconciliation reactivates the same employee identity.
 - Local asset deletion cascades attributes and atomically stores a restore task; full sync or explicit targeted restoration recreates an assigned source device.
 - Invalid/truncated snapshots, duplicate serial/provider IDs, conflicting existing identity or invalid nonempty email fail before destructive writes. Missing serial rows during full sync preserve known provider identities.
 - Explicit null clears nullable mapped values; missing optional fields preserve during full sync where supported. Events carry complete values. Source shared metadata uses deterministic lexicographic provider-ID precedence with warnings.
@@ -113,3 +114,9 @@ Future work: verified Jamf complete-event semantics/authentication, tenant scope
 7. Verify provider CRUD -> durable payload -> worker -> inventory, target lookup without any file reads, tombstone identity and rollback/idempotence, then Docker/browser checks.
 
 Provider mutations are developer simulator endpoints; they do not add manual create/edit to inventory UI. A raw mounted-file edit is not automatically a provider mutation until imported/scanned. Targeted restore reads the current provider store, which resolves the previous restoration ordering bug without reintroducing a hidden full-file read.
+
+## Final implemented boundary
+
+Provider CRUD uses `mock_provider_devices`, separate from inventory assets, in the same demonstration backend/database. Its adapter performs indexed provider-ID lookup; restoration never reads the JSON file or lists the provider fleet. A retained removed-provider checkpoint is returned internally even when the public GET returns 404, so restoration fences older queued upserts. Current-provider reconciliation and explicit direct-file import are distinct actions; file import intentionally refreshes provider state.
+
+Employees use soft-deletion tombstones retaining only ID/email and deletion time; links remain, active lists exclude tombstones, and source reconciliation reactivates the same ID. This supersedes earlier unassignment-on-employee-deletion discussion. Presence-aware normalization merges omitted source fields with the producer baseline before emitting complete messages; explicit null still clears supported fields. Provider startup seeds once and migration backfills missing source rows without manufacturing events.

@@ -110,6 +110,9 @@ function App() {
         <button disabled={busy} onClick={() => sync("provider")}>
           {busy ? "Working…" : "Sync Now"}
         </button>
+        <button disabled={busy} onClick={() => sync("file")}>
+          Import source JSON
+        </button>
       </header>
       <nav>
         {["assets", "employees", "activity"].map((t) => (
