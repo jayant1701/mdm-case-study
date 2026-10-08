@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { downloadPendingNotificationsCsv } from "./pendingNotificationsCsv.js";
 
 export function AssetList({
@@ -241,9 +241,13 @@ export function Testing({
   deletedAssets,
   events,
   runs,
+  providerResult,
   busy,
   onReset,
   onKafkaFailure,
+  onProviderCreate,
+  onProviderUpdate,
+  onProviderRemove,
   onRetry,
 }) {
   return (
@@ -275,6 +279,13 @@ export function Testing({
           </button>
         </section>
       </div>
+      <ProviderLab
+        busy={busy}
+        result={providerResult}
+        onCreate={onProviderCreate}
+        onUpdate={onProviderUpdate}
+        onRemove={onProviderRemove}
+      />
       <h3>Locally deleted devices</h3>
       {!deletedAssets.length && <p>No locally deleted devices.</p>}
       {deletedAssets.length > 0 && (
@@ -331,6 +342,176 @@ export function Testing({
           {r.error_details && <p className="error">{r.error_details}</p>}
         </article>
       ))}
+    </>
+  );
+}
+
+function ProviderLab({ busy, result, onCreate, onUpdate, onRemove }) {
+  const [create, setCreate] = useState({
+    provider_device_id: "demo-asset-001",
+    serial_code: "DEMO-SERIAL-001",
+    device_name: "Provider Lab MacBook",
+    employee_email: "demo.employee@company.test",
+    employee_name: "Demo Employee",
+    ram_gb: "16",
+  });
+  const [update, setUpdate] = useState({
+    provider_device_id: "101",
+    device_name: "Alex’s MacBook Pro (Provider Lab)",
+    ram_gb: "32",
+  });
+  const [removeId, setRemoveId] = useState("demo-asset-001");
+  const counters = result?.sync?.counters;
+
+  function field(state, setState, key) {
+    return {
+      value: state[key],
+      onChange: (event) => setState({ ...state, [key]: event.target.value }),
+    };
+  }
+
+  return (
+    <>
+      <h3>Provider Lab</h3>
+      <p>
+        Change the mock provider through its HTTP adapter, then run real
+        reconciliation and show the resulting inventory counters. Create the
+        demo device before removing its default ID.
+      </p>
+      <div className="provider-lab-grid">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            onCreate({ ...create, ram_gb: Number(create.ram_gb) });
+          }}
+        >
+          <h4>Create a provider device</h4>
+          <label>
+            Provider device ID
+            <input
+              required
+              {...field(create, setCreate, "provider_device_id")}
+            />
+          </label>
+          <label>
+            Serial number
+            <input required {...field(create, setCreate, "serial_code")} />
+          </label>
+          <label>
+            Device name
+            <input required {...field(create, setCreate, "device_name")} />
+          </label>
+          <label>
+            Employee email
+            <input
+              required
+              type="email"
+              {...field(create, setCreate, "employee_email")}
+            />
+          </label>
+          <label>
+            Employee name
+            <input required {...field(create, setCreate, "employee_name")} />
+          </label>
+          <label>
+            RAM (GiB)
+            <input
+              required
+              min="0"
+              step="0.01"
+              type="number"
+              {...field(create, setCreate, "ram_gb")}
+            />
+          </label>
+          <button disabled={busy} type="submit">
+            Create and sync
+          </button>
+        </form>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            const { provider_device_id, ...changes } = update;
+            onUpdate(provider_device_id, {
+              ...changes,
+              ram_gb: Number(changes.ram_gb),
+            });
+          }}
+        >
+          <h4>Update a provider device</h4>
+          <label>
+            Provider device ID
+            <input
+              required
+              {...field(update, setUpdate, "provider_device_id")}
+            />
+          </label>
+          <label>
+            Device name
+            <input required {...field(update, setUpdate, "device_name")} />
+          </label>
+          <label>
+            RAM (GiB)
+            <input
+              required
+              min="0"
+              step="0.01"
+              type="number"
+              {...field(update, setUpdate, "ram_gb")}
+            />
+          </label>
+          <button disabled={busy} type="submit">
+            Update and sync
+          </button>
+        </form>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            onRemove(removeId);
+          }}
+        >
+          <h4>Remove a provider device</h4>
+          <label>
+            Provider device ID
+            <input
+              required
+              value={removeId}
+              onChange={(event) => setRemoveId(event.target.value)}
+            />
+          </label>
+          <p>
+            This removes the device from the mock provider and reconciliation
+            removes its local asset.
+          </p>
+          <button disabled={busy} type="submit">
+            Remove and sync
+          </button>
+        </form>
+      </div>
+      {result && counters && (
+        <section className="provider-result" role="status">
+          <h4>Last Provider Lab result</h4>
+          <p>
+            {result.action} · provider device {result.provider_device_id} ·{" "}
+            {result.provider_event} · {result.notifications_created}{" "}
+            notification
+            {result.notifications_created === 1 ? "" : "s"} created
+          </p>
+          <div className="counter-grid">
+            <span>
+              <strong>{counters.created_assets}</strong> created
+            </span>
+            <span>
+              <strong>{counters.updated_assets}</strong> updated
+            </span>
+            <span>
+              <strong>{counters.removed_assets}</strong> removed
+            </span>
+            <span>
+              <strong>{counters.unchanged_assets}</strong> unchanged
+            </span>
+          </div>
+        </section>
+      )}
     </>
   );
 }

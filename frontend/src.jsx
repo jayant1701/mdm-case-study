@@ -20,6 +20,7 @@ function App() {
   const [events, setEvents] = useState([]);
   const [runs, setRuns] = useState([]);
   const [deletedAssets, setDeletedAssets] = useState([]);
+  const [providerResult, setProviderResult] = useState(null);
   const [outbox, setOutbox] = useState({
     pending: 0,
     notifications: [],
@@ -96,6 +97,22 @@ function App() {
     await action(async () => {
       setDetail(await request("/assets/" + id));
       setTab("assets");
+    });
+  }
+  async function changeProvider(method, providerId, payload) {
+    await action(async () => {
+      const path =
+        "/demo/provider-devices" +
+        (providerId ? "/" + encodeURIComponent(providerId) : "");
+      const result = await request(path, {
+        method,
+        body: payload ? JSON.stringify(payload) : undefined,
+      });
+      setProviderResult(result);
+      const counters = result.sync.counters;
+      setNotice(
+        `Provider ${result.action} reconciled: ${counters.created_assets} created, ${counters.updated_assets} updated, ${counters.removed_assets} removed and ${counters.unchanged_assets} unchanged.`,
+      );
     });
   }
   return (
@@ -193,11 +210,13 @@ function App() {
           deletedAssets={deletedAssets}
           events={events}
           runs={runs}
+          providerResult={providerResult}
           busy={busy}
           onReset={() =>
             action(async () => {
               const result = await request("/demo/reset", { method: "POST" });
               setDetail(null);
+              setProviderResult(null);
               setPage(1);
               setNotice(
                 `Demo reset with ${result.provider_devices} provider devices. Click Sync Now to fetch them.`,
@@ -215,6 +234,11 @@ function App() {
               setTab("activity");
             })
           }
+          onProviderCreate={(payload) => changeProvider("POST", null, payload)}
+          onProviderUpdate={(id, payload) =>
+            changeProvider("PATCH", id, payload)
+          }
+          onProviderRemove={(id) => changeProvider("DELETE", id)}
           onRetry={(id) =>
             action(() =>
               request("/events/" + id + "/retry", { method: "POST" }),

@@ -145,6 +145,45 @@ article {
 .testing-grid section {
   margin: 0;
 }
+.provider-lab-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 16px;
+}
+.provider-lab-grid form {
+  background: white;
+  border: 1px solid #dbe0ea;
+  border-radius: 10px;
+  padding: 20px;
+}
+.provider-lab-grid label {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+  color: #39445a;
+}
+.provider-lab-grid input {
+  width: 100%;
+}
+.provider-result {
+  border-color: #8aabf7;
+  background: #f5f8ff;
+}
+.counter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+}
+.counter-grid span {
+  background: white;
+  border: 1px solid #dbe0ea;
+  border-radius: 7px;
+  padding: 12px;
+}
+.counter-grid strong {
+  display: block;
+  font-size: 24px;
+}
 input {
   font: inherit;
   padding: 10px;

@@ -40,4 +40,7 @@ Route::post('/sync/provider', [InventoryController::class, 'syncProvider']);
 if (app()->environment('local', 'testing')) {
     Route::post('/demo/reset', [DemoController::class, 'reset']);
     Route::post('/demo/kafka-failure', [DemoController::class, 'simulateKafkaFailure']);
+    Route::post('/demo/provider-devices', [DemoController::class, 'createProviderDevice']);
+    Route::patch('/demo/provider-devices/{device}', [DemoController::class, 'updateProviderDevice']);
+    Route::delete('/demo/provider-devices/{device}', [DemoController::class, 'removeProviderDevice']);
 }

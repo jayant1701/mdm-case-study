@@ -42,7 +42,7 @@ The UI has four areas:
 - **Assets** lists devices. Details open directly below the selected row.
 - **Employees** lists active employees and their assigned assets.
 - **Activity** shows whether provider notifications are waiting. If any are pending, it lists their device name, serial, change type and retry state, offers a manual processing action, and can export the displayed rows as CSV.
-- **Testing** can reset the demo, create one deterministic delivery-failure state, list locally deleted devices and show technical sync/event history.
+- **Testing** can reset the demo, create one deterministic delivery-failure state, change provider devices through Provider Lab, list locally deleted devices and show technical sync/event history.
 
 `docker compose down` stops the application. `docker compose down -v` also deletes both MySQL volumes and the Kafka volume.
 
@@ -279,12 +279,15 @@ Inventory endpoints are on port 8000:
 | POST | `/api/simulator/jamf` | Technical fixture scan; not exposed in the UI |
 | POST | `/api/demo/reset` | Local/testing reset of provider fixture state and local inventory |
 | POST | `/api/demo/kafka-failure` | Local/testing deterministic pending notification |
+| POST | `/api/demo/provider-devices` | Provider Lab: create a provider device and reconcile it |
+| PATCH | `/api/demo/provider-devices/{providerId}` | Provider Lab: update name/RAM and reconcile it |
+| DELETE | `/api/demo/provider-devices/{providerId}` | Provider Lab: remove a provider device and reconcile it |
 
 The demo reset/failure routes are registered only in local/testing environments. The outbox status/retry routes are currently available without authentication because this is a local case study; they require restricted access in production.
 
 ## Verification
 
-The backend suite completed successfully: **60 tests and 378 assertions**. The React production build completed successfully.
+The backend suite completed successfully: **61 tests and 392 assertions**. The React production build completed successfully.
 
 Automated tests cover initial/repeated sync, RAM and assignment changes, missing/invalid data, local deletion and recreation, provider CRUD, transactional outbox behavior, retries, duplicate/stale events, Kafka receipt/quarantine rules, timestamp-only suppression, remote reconciliation and adapter boundaries.
 
@@ -297,6 +300,7 @@ Browser checks confirmed:
 - the CSV export action completes for the displayed pending rows;
 - Activity manually publishes that one pending notification;
 - Activity then reports an empty outbox.
+- Provider Lab create, update and remove operations return actual reconciliation counters.
 
 Multi-page pagination, mobile layout and full screen-reader testing remain unchecked. The pending asset-details navigation race is recorded in `docs/backlog.md`.
 
@@ -321,3 +325,5 @@ npm run build
 Before connecting real customers, verify the real Jamf API/webhook contract, add provider authentication and tenant-scoped authorization, schedule periodic reconciliation, define SQL/Kafka retention, add metrics and alerts, benchmark peak workloads, and test database/Kafka backup and recovery.
 
 The current result is a local case study: one mock provider, one company scope, separate provider and inventory databases, transactional outbox, Kafka transport, durable inventory inbox, queue worker and manual recovery controls.
+
+For a concise source-code walkthrough, see [Codebase onboarding](docs/onboarding.md).

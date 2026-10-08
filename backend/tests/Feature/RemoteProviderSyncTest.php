@@ -10,6 +10,7 @@ use App\Services\AssetDeletionService;
 use App\Services\EventProcessor;
 use App\Services\EventReceiver;
 use App\Services\JamfSyncService;
+use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
@@ -75,6 +76,88 @@ final class RemoteProviderSyncTest extends InventoryTestCase
                 $this->assertSame(0, DB::table($table)->count(), "$table must not be written by inventory");
             }
         }
+    }
+
+    public function test_provider_lab_create_update_and_remove_return_actual_sync_counters(): void
+    {
+        $state = null;
+        $version = 0;
+        $generation = 0;
+        Http::fake(function (ClientRequest $request) use (&$state, &$version, &$generation) {
+            $url = $request->url();
+            if ($request->method() === 'POST' && str_ends_with($url, '/api/provider/devices')) {
+                $device = $request->data();
+                $version = $generation = 1;
+                $state = [
+                    'event_id' => 'lab-1',
+                    'provider_device_id' => $device['provider_device_id'],
+                    'version' => $version,
+                    'producer_generation' => $generation,
+                    'type' => 'device.added',
+                    'device' => $device,
+                ];
+            } elseif ($request->method() === 'PATCH' && str_ends_with($url, '/api/provider/devices/lab-1')) {
+                $version++;
+                $generation++;
+                $state['device'] = array_replace_recursive($state['device'], $request->data());
+                $state = [
+                    'event_id' => 'lab-'.$generation,
+                    'provider_device_id' => 'lab-1',
+                    'version' => $version,
+                    'producer_generation' => $generation,
+                    'type' => 'device.changed',
+                    'device' => $state['device'],
+                ];
+            } elseif ($request->method() === 'DELETE' && str_ends_with($url, '/api/provider/devices/lab-1')) {
+                $version++;
+                $generation++;
+                $state = [
+                    'event_id' => 'lab-'.$generation,
+                    'provider_device_id' => 'lab-1',
+                    'version' => $version,
+                    'producer_generation' => $generation,
+                    'type' => 'device.removed',
+                    'device' => $state['device'],
+                ];
+            } elseif ($request->method() === 'GET' && str_ends_with($url, '/api/provider/snapshot')) {
+                return Http::response(['generation' => $generation, 'devices' => [$state]]);
+            } else {
+                return Http::response(['message' => 'Unexpected provider request.'], 500);
+            }
+
+            return Http::response([
+                'generation' => $generation,
+                'emitted' => 1,
+                'event_ids' => [$state['event_id']],
+                'device' => $state,
+            ]);
+        });
+
+        $created = $this->postJson('/api/demo/provider-devices', [
+            'provider_device_id' => 'lab-1',
+            'serial_code' => 'LAB-SERIAL-1',
+            'device_name' => 'Provider Lab MacBook',
+            'employee_email' => 'lab.employee@company.test',
+            'employee_name' => 'Lab Employee',
+            'ram_gb' => 16,
+        ])->assertOk()->json();
+        $this->assertSame(1, $created['sync']['counters']['created_assets']);
+        $this->assertSame('device.added', $created['provider_event']);
+        $this->assertDatabaseHas('assets', ['provider_device_id' => 'lab-1', 'device_name' => 'Provider Lab MacBook']);
+
+        $updated = $this->patchJson('/api/demo/provider-devices/lab-1', [
+            'device_name' => 'Provider Lab MacBook Updated',
+            'ram_gb' => 32,
+        ])->assertOk()->json();
+        $this->assertSame(1, $updated['sync']['counters']['updated_assets']);
+        $this->assertSame('device.changed', $updated['provider_event']);
+        $this->assertSame(32.0, (float) Asset::where('provider_device_id', 'lab-1')->firstOrFail()->specifications->ram_gb);
+
+        $removed = $this->deleteJson('/api/demo/provider-devices/lab-1')->assertOk()->json();
+        $this->assertSame(1, $removed['sync']['counters']['removed_assets']);
+        $this->assertSame('device.removed', $removed['provider_event']);
+        $this->assertDatabaseMissing('assets', ['provider_device_id' => 'lab-1']);
+        $this->assertNoProducerWrites();
     }
 
     public function test_full_import_crosses_http_boundary_and_applies_returned_provider_versions(): void

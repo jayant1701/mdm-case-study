@@ -17,4 +17,10 @@ interface RemoteProviderGateway extends TargetedDeviceProvider
     public function resetDemo(): array;
 
     public function simulateKafkaFailure(): array;
+
+    public function create(array $device): array;
+
+    public function patch(string $id, array $changes): array;
+
+    public function delete(string $id): array;
 }
