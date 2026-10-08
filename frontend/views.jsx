@@ -35,9 +35,10 @@ export function AssetList({
                   <td>{a.device_model?.model_name || "Unknown"}</td>
                   <td>{a.specifications?.ram_gb ?? "—"} GiB</td>
                   <td>
-                    {a.employee?.deleted_at
-                      ? `Deleted user (${a.employee.email})`
-                      : a.employee?.email || "Unassigned"}
+                    {a.employee?.email ||
+                      (a.deleted_employee?.email
+                        ? `Deleted user (${a.deleted_employee.email})`
+                        : "Unassigned")}
                   </td>
                   <td>
                     <button disabled={busy} onClick={() => onDetails(a.id)}>
@@ -155,8 +156,10 @@ function EmployeeDetails({ employee, onAssetDetails, onClose }) {
   const fields = [
     ["Name", employee.name],
     ["Email", employee.email],
+    ["Username", employee.username],
+    ["Position", employee.position],
     ["Phone", employee.phone],
-    ["Status", employee.deleted_at ? "Deleted locally" : "Active"],
+    ["Status", "Active"],
     ["Assigned devices", assets.length],
   ];
 
@@ -217,19 +220,24 @@ export function AssetDetails({ asset, onClose }) {
   const fields = [
     ["RAM", specifications.ram_gb, "GiB"],
     ["Storage", specifications.storage_gb, "GiB"],
-    ["Processor type", specifications.processor_type],
-    ["Core count", specifications.core_count],
+    ["Processor type", asset.device_model?.processor_type],
+    ["Core count", asset.device_model?.core_count],
+    ["Platform", asset.device_model?.platform],
     ["Battery capacity", specifications.battery_capacity_percent, "%"],
     ["Serial code", asset.serial_code],
     [
       "Employee",
-      asset.employee?.deleted_at
-        ? `Deleted user (${asset.employee.email})`
-        : asset.employee?.email || "Unassigned",
+      asset.employee?.email ||
+        (asset.deleted_employee?.email
+          ? `Deleted user (${asset.deleted_employee.email})`
+          : "Unassigned"),
     ],
     ["Provider", asset.provider],
     ["Provider device ID", asset.provider_device_id],
     ["Purchase date", asset.purchase_date],
+    ["Report date", asset.report_date],
+    ["Last contact", asset.last_contact_at],
+    ["Site", asset.site_name],
   ];
   return (
     <section>

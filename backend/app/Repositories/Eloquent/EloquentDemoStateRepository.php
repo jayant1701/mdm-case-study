@@ -17,7 +17,7 @@ final class EloquentDemoStateRepository implements DemoStateRepository
                 'failed_jobs',
                 'rejected_notifications',
                 'event_inboxes',
-                'restore_tasks',
+                'deleted_assets',
                 'sync_runs',
                 'shared_event_states',
                 'device_event_states',
@@ -26,6 +26,7 @@ final class EloquentDemoStateRepository implements DemoStateRepository
                 'assets',
                 'device_models',
                 'employees',
+                'deleted_employees',
             ] as $table) {
                 DB::table($table)->delete();
             }

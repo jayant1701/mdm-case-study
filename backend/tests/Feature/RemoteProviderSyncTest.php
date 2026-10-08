@@ -201,7 +201,7 @@ final class RemoteProviderSyncTest extends InventoryTestCase
         app(EventProcessor::class)->process($old->id);
         $this->assertSame('ignored_stale', $old->fresh()->outcome);
         $this->assertSame(64.0, Asset::firstOrFail()->specifications->ram_gb);
-        $this->assertDatabaseHas('restore_tasks', ['provider_device_id' => '101', 'status' => 'restored']);
+        $this->assertDatabaseMissing('deleted_assets', ['provider_device_id' => '101']);
         Http::assertSentCount(2);
         $this->assertNoProducerWrites();
     }
@@ -278,7 +278,7 @@ final class RemoteProviderSyncTest extends InventoryTestCase
             $this->assertNotEmpty($error->getMessage());
         }
         $this->assertDatabaseCount('assets', 0);
-        $this->assertDatabaseHas('restore_tasks', ['provider_device_id' => '101', 'status' => 'pending']);
+        $this->assertDatabaseHas('deleted_assets', ['provider_device_id' => '101']);
         $this->assertDatabaseMissing('device_event_states', ['provider_device_id' => '999']);
     }
 

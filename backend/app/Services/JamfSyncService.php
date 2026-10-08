@@ -3,8 +3,8 @@
 namespace App\Services;
 
 use App\Contracts\DeviceProvider;
+use App\Contracts\Persistence\DeletedAssetRepository;
 use App\Contracts\Persistence\EmployeeRepository;
-use App\Contracts\Persistence\RestoreTaskRepository;
 use App\Contracts\Persistence\SyncRunRepository;
 use App\Contracts\Persistence\TransactionBoundary;
 use App\Contracts\TargetedDeviceProvider;
@@ -13,7 +13,7 @@ use App\Models\SyncRun;
 
 final class JamfSyncService
 {
-    public function __construct(private DeviceProvider $provider, private DeviceReconciler $reconciler, private EmployeeRepository $employees, private RestoreTaskRepository $restorations, private SyncRunRepository $runs, private TransactionBoundary $transactions, private DeviceEventSimulator $simulator, private TargetedDeviceProvider $targeted) {}
+    public function __construct(private DeviceProvider $provider, private DeviceReconciler $reconciler, private EmployeeRepository $employees, private DeletedAssetRepository $deletedAssets, private SyncRunRepository $runs, private TransactionBoundary $transactions, private DeviceEventSimulator $simulator, private TargetedDeviceProvider $targeted) {}
 
     public function full(): SyncRun
     {
@@ -73,36 +73,38 @@ final class JamfSyncService
 
                 return;
             }
-            foreach ($this->restorations->pendingFor('jamf') as $task) {
-                $this->restorations->recordAttempt($task->id);
-                if (! $task->provider_device_id) {
-                    throw new \RuntimeException('Restoration requires a retained provider device ID.');
-                }
-                $event = $this->targeted->current($task->provider_device_id);
+            foreach ($this->deletedAssets->recoverableFor('jamf') as $deletedAsset) {
+                $event = $this->targeted->current($deletedAsset->provider_device_id);
                 if (! $event) {
-                    $this->restorations->resolve($task->id, 'upstream_missing');
+                    $this->deletedAssets->remove($deletedAsset->id);
 
                     continue;
                 }
-                if ($event->device->serial !== $task->serial_code) {
+                if ($event->device->serial !== $deletedAsset->serial_code) {
                     throw new \RuntimeException('Restoration serial does not match the retained device identity.');
                 }
                 if ($event->state() === 'removed') {
                     $this->simulator->publish($event->device, 'removed', true);
-                    $this->restorations->resolve($task->id, 'upstream_missing');
+                    $this->deletedAssets->remove($deletedAsset->id);
 
                     continue;
                 }
                 if (! $event->device->email) {
                     $this->simulator->publish($event->device, 'unassigned', true);
-                    $this->restorations->resolve($task->id, 'upstream_unassigned');
+                    $this->deletedAssets->remove($deletedAsset->id);
 
                     continue;
                 }
                 $this->reconciler->validateIdentities([$event->device]);
                 $fence = $this->simulator->publish($event->device, 'assigned', true);
                 $this->reconciler->apply($event->device, $counts, $fence['generation']);
-                $this->restorations->resolve($task->id, 'restored');
+                $this->deletedAssets->remove($deletedAsset->id);
+            }
+            foreach ($this->employees->deletedEmployeeProviderIds('jamf') as $providerId) {
+                $event = $this->targeted->current($providerId);
+                if ($event && $event->state() !== 'removed' && $event->device->email) {
+                    $this->reconciler->apply($event->device, $counts, $event->envelope['producer_generation']);
+                }
             }
         });
     }

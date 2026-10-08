@@ -3,15 +3,15 @@
 namespace App\Services;
 
 use App\Contracts\Persistence\AssetRepository;
+use App\Contracts\Persistence\DeletedAssetRepository;
 use App\Contracts\Persistence\DeviceModelRepository;
 use App\Contracts\Persistence\EmployeeRepository;
-use App\Contracts\Persistence\RestoreTaskRepository;
 use App\Data\DeviceRecord;
 use RuntimeException;
 
 final class DeviceReconciler
 {
-    public function __construct(private AssetRepository $assets, private EmployeeRepository $employees, private DeviceModelRepository $models, private RestoreTaskRepository $restorations, private SharedMetadataPolicy $shared) {}
+    public function __construct(private AssetRepository $assets, private EmployeeRepository $employees, private DeviceModelRepository $models, private DeletedAssetRepository $deletedAssets, private SharedMetadataPolicy $shared) {}
 
     public function validateIdentities(array $devices): void
     {
@@ -39,6 +39,7 @@ final class DeviceReconciler
         if (! $device->email) {
             $counts['skipped_unassigned']++;
             $counts['removed_assets'] += $this->assets->removeBySerial('jamf', $device->serial);
+            $this->deletedAssets->removeByIdentity('jamf', $device->providerId, $device->serial);
 
             return;
         }
@@ -54,18 +55,20 @@ final class DeviceReconciler
         $existing = $device->preserveModel ? $this->assets->findBySerial($device->serial) : null;
         $fields = $device->asset + [
             'employee_id' => $employee->id,
+            'deleted_employee_id' => null,
             'device_model_id' => $device->preserveModel ? $existing?->device_model_id : $model?->id,
             'provider' => 'jamf',
             'provider_device_id' => $device->providerId,
         ];
         $result = $this->assets->persistSnapshot($device->serial, $fields, $device->specifications);
         $counts[$result->created ? 'created_assets' : ($result->changed ? 'updated_assets' : 'unchanged_assets')]++;
-        $this->restorations->markRestoredBySerial('jamf', $device->serial);
+        $this->deletedAssets->removeByIdentity('jamf', $device->providerId, $device->serial);
     }
 
     public function removeProviderDevice(string $id, array &$counts): void
     {
         $counts['removed_assets'] += $this->assets->removeProviderDevice('jamf', $id);
+        $this->deletedAssets->removeByIdentity('jamf', $id, '');
     }
 
     public function removeAbsent(array $devices, array &$counts): void

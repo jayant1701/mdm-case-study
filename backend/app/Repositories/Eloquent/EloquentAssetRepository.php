@@ -6,7 +6,9 @@ use App\Contracts\Persistence\AssetRepository;
 use App\Data\AssetWriteResult;
 use App\Models\Asset;
 use App\Models\AssetAttribute;
+use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use RuntimeException;
 
 final class EloquentAssetRepository implements AssetRepository
 {
@@ -24,6 +26,9 @@ final class EloquentAssetRepository implements AssetRepository
     {
         $asset = Asset::firstOrNew(['serial_code' => $serial]);
         $created = ! $asset->exists;
+        if ($asset->exists && isset($fields['report_date']) && $fields['report_date'] !== null && $asset->report_date !== null && CarbonImmutable::parse($fields['report_date'])->lt($asset->report_date)) {
+            throw new RuntimeException('Older reportDate cannot overwrite newer asset state: '.$serial);
+        }
         $asset->fill($fields);
         $changed = $asset->isDirty();
         $asset->save();
@@ -67,11 +72,11 @@ final class EloquentAssetRepository implements AssetRepository
 
     public function paginateWithRelations(int $perPage): LengthAwarePaginator
     {
-        return Asset::with(['employee', 'deviceModel', 'specifications'])->orderBy('id')->paginate($perPage);
+        return Asset::with(['employee', 'deletedEmployee', 'deviceModel', 'specifications'])->orderBy('id')->paginate($perPage);
     }
 
     public function details(int $id): Asset
     {
-        return Asset::with(['employee', 'deviceModel', 'specifications'])->findOrFail($id);
+        return Asset::with(['employee', 'deletedEmployee', 'deviceModel', 'specifications'])->findOrFail($id);
     }
 }

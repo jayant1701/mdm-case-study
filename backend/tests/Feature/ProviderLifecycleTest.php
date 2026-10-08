@@ -47,7 +47,7 @@ final class ProviderLifecycleTest extends InventoryTestCase
         $new['provider_device_id'] = '108';
         $new['serial_code'] = 'NEW-SERIAL-108';
         $new['email'] = 'new@company.test';
-        $new['employee'] = ['name' => 'New Employee', 'phone' => null];
+        $new['employee'] = ['username' => 'new.employee', 'name' => 'New Employee', 'position' => null, 'phone' => null];
         $this->postJson('/api/provider/jamf/devices', $new)->assertCreated()->assertJsonPath('emitted', 1);
         $this->drain();
         $this->assertDatabaseCount('assets', 8);
@@ -122,7 +122,8 @@ final class ProviderLifecycleTest extends InventoryTestCase
 
         $this->assertDatabaseCount('assets', 0);
         $this->assertDatabaseCount('employees', 0);
-        $this->assertDatabaseCount('restore_tasks', 0);
+        $this->assertDatabaseCount('deleted_assets', 0);
+        $this->assertDatabaseCount('deleted_employees', 0);
         $this->assertDatabaseCount('sync_runs', 0);
         $this->assertDatabaseCount('event_inboxes', 0);
         $this->assertDatabaseHas('sync_locks', ['provider' => 'jamf']);
@@ -149,7 +150,7 @@ final class ProviderLifecycleTest extends InventoryTestCase
     {
         Queue::fake();
         $this->sync();
-        foreach (['make', 'modelIdentifier'] as $key) {
+        foreach (['make', 'modelIdentifier', 'processorType', 'coreCount'] as $key) {
             $this->source['results'][1]['hardware'][$key] = $this->source['results'][0]['hardware'][$key];
         }unset($this->source['results'][1]['hardware']['model']);
         $this->write();
@@ -179,7 +180,7 @@ final class ProviderLifecycleTest extends InventoryTestCase
         $asset = Asset::where('provider_device_id', '101')->first();
         $this->deleteJson('/api/assets/'.$asset->id)->assertNoContent();
         $this->postJson('/api/restorations')->assertOk();
-        $this->assertDatabaseHas('restore_tasks', ['provider_device_id' => '101', 'status' => 'upstream_missing']);
+        $this->assertDatabaseMissing('deleted_assets', ['provider_device_id' => '101']);
         app(EventProcessor::class)->process($old->id);
         $this->assertSame('ignored_stale', $old->fresh()->outcome);
         $this->assertDatabaseMissing('assets', ['provider_device_id' => '101']);

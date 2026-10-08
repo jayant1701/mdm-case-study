@@ -18,4 +18,34 @@ final class NumericStateTest extends InventoryTestCase
         $roundTripped['specifications']['ram_gb'] = 64;
         $this->assertNotSame(DeviceEvent::semanticHash($device, 'assigned'), DeviceEvent::semanticHash($roundTripped, 'assigned'));
     }
+
+    public function test_legacy_optional_fields_are_canonicalized_for_hash_comparison(): void
+    {
+        $legacy = DeviceEvent::fromRecord(app(DeviceProvider::class)->snapshot()->devices[0]);
+        $legacy['model']['platform'] = null;
+        $legacy['model']['processor_type'] = null;
+        $legacy['model']['core_count'] = null;
+        $legacy['specifications']['processor_type'] = null;
+        $legacy['specifications']['core_count'] = null;
+        unset(
+            $legacy['employee']['username'],
+            $legacy['employee']['position'],
+            $legacy['model']['platform'],
+            $legacy['model']['processor_type'],
+            $legacy['model']['core_count'],
+            $legacy['asset']['last_contact_at'],
+            $legacy['asset']['site_provider_id'],
+            $legacy['asset']['site_name'],
+        );
+        $canonical = DeviceEvent::parse([
+            'event_id' => 'legacy',
+            'provider_device_id' => $legacy['provider_device_id'],
+            'version' => 1,
+            'producer_generation' => 1,
+            'type' => 'device.changed',
+            'device' => $legacy,
+        ])->envelope['device'];
+
+        $this->assertSame(DeviceEvent::semanticHash($legacy, 'assigned'), DeviceEvent::semanticHash($canonical, 'assigned'));
+    }
 }

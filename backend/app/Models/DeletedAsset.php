@@ -4,8 +4,10 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-final class RestoreTask extends Model
+final class DeletedAsset extends Model
 {
+    public $timestamps = false;
+
     protected $guarded = [];
 
     protected function casts(): array

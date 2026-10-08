@@ -3,8 +3,8 @@
 namespace Tests\Feature;
 
 use App\Contracts\DeviceProvider;
+use App\Contracts\Persistence\DeletedAssetRepository;
 use App\Contracts\Persistence\EventInboxRepository;
-use App\Contracts\Persistence\RestoreTaskRepository;
 use App\Data\DeviceEvent;
 use App\Jobs\ProcessDeviceEvent;
 use App\Models\Asset;
@@ -23,17 +23,17 @@ final class PersistenceBoundaryTest extends InventoryTestCase
     {
         $this->sync();
         $asset = Asset::where('provider_device_id', '101')->first();
-        $actual = app(RestoreTaskRepository::class);
-        $substitute = Mockery::mock(RestoreTaskRepository::class);
+        $actual = app(DeletedAssetRepository::class);
+        $substitute = Mockery::mock(DeletedAssetRepository::class);
         $substitute->shouldReceive('recordLocalDeletion')->once()->andReturnUsing(function ($record) use ($actual) {
             $actual->recordLocalDeletion($record);
             throw new RuntimeException('Simulated restoration storage failure.');
         });
-        $this->app->instance(RestoreTaskRepository::class, $substitute);
+        $this->app->instance(DeletedAssetRepository::class, $substitute);
         $this->deleteJson('/api/assets/'.$asset->id)->assertStatus(422);
         $this->assertDatabaseCount('assets', 7);
         $this->assertDatabaseCount('asset_attributes', 7);
-        $this->assertDatabaseCount('restore_tasks', 0);
+        $this->assertDatabaseCount('deleted_assets', 0);
     }
 
     public function test_substituted_inbox_acknowledgment_failure_rolls_back_device_update(): void

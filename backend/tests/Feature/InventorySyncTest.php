@@ -29,6 +29,16 @@ class InventorySyncTest extends InventoryTestCase
             ->assertJsonCount(2, 'assets')
             ->assertJsonPath('assets.0.device_model.model_identifier', 'MacBookPro18,3')
             ->assertJsonPath('assets.0.specifications.ram_gb', 16);
+        $asset = Asset::where('provider_device_id', '101')->firstOrFail();
+        $this->assertSame('alex.smith', $asset->employee->username);
+        $this->assertSame('Backend Engineer', $asset->employee->position);
+        $this->assertSame('Mac', $asset->deviceModel->platform);
+        $this->assertSame('Apple M1 Pro', $asset->deviceModel->processor_type);
+        $this->assertSame(10, $asset->deviceModel->core_count);
+        $this->assertSame('2025-11-20 09:15:00', $asset->report_date->format('Y-m-d H:i:s'));
+        $this->assertSame('2026-01-05 10:30:12', $asset->last_contact_at->format('Y-m-d H:i:s'));
+        $this->assertNull($asset->site_provider_id);
+        $this->assertNull($asset->site_name);
     }
 
     public function test_ram_reassignment_and_explicit_null(): void
@@ -48,13 +58,15 @@ class InventorySyncTest extends InventoryTestCase
 
     public function test_shared_model_does_not_share_configurations(): void
     {
-        foreach (['make', 'modelIdentifier', 'model'] as $field) {
+        foreach (['make', 'modelIdentifier', 'model', 'processorType', 'coreCount'] as $field) {
             $this->source['results'][1]['hardware'][$field] = $this->source['results'][0]['hardware'][$field];
         }$this->write();
         $this->sync();
         $a = Asset::where('provider_device_id', '101')->first();
         $b = Asset::where('provider_device_id', '102')->first();
         $this->assertSame($a->device_model_id, $b->device_model_id);
+        $this->assertSame('Apple M1 Pro', $a->deviceModel->processor_type);
+        $this->assertSame(10, $a->deviceModel->core_count);
         $this->assertSame(16.0, $a->specifications->ram_gb);
         $this->assertSame(8.0, $b->specifications->ram_gb);
     }
@@ -67,17 +79,19 @@ class InventorySyncTest extends InventoryTestCase
         $email = $asset->employee->email;
         $this->deleteJson('/api/assets/'.$old)->assertNoContent();
         $this->assertDatabaseMissing('asset_attributes', ['asset_id' => $old]);
-        $this->assertDatabaseHas('restore_tasks', ['serial_code' => $asset->serial_code, 'status' => 'pending']);
+        $this->assertDatabaseHas('deleted_assets', ['serial_code' => $asset->serial_code]);
         $this->sync();
         $this->assertDatabaseCount('assets', 7);
-        $this->assertDatabaseHas('restore_tasks', ['status' => 'restored']);
+        $this->assertDatabaseMissing('deleted_assets', ['serial_code' => $asset->serial_code]);
         $employee = Employee::where('email', $email)->first();
         $this->deleteJson('/api/employees/'.$employee->id)->assertNoContent();
-        $this->assertDatabaseHas('assets', ['employee_id' => $employee->id]);
-        $this->assertSoftDeleted('employees', ['id' => $employee->id]);
+        $this->assertDatabaseHas('assets', ['employee_id' => null, 'deleted_employee_id' => $employee->id]);
+        $this->assertDatabaseMissing('employees', ['id' => $employee->id]);
+        $this->assertDatabaseHas('deleted_employees', ['employee_id' => $employee->id, 'email' => $email]);
         $this->sync();
         $this->assertDatabaseCount('employees', 6);
         $this->assertSame(0, Asset::whereNull('employee_id')->count());
+        $this->assertDatabaseMissing('deleted_employees', ['employee_id' => $employee->id]);
     }
 
     public function test_targeted_restoration_missing_and_unassigned(): void
@@ -93,7 +107,7 @@ class InventorySyncTest extends InventoryTestCase
         $this->write();
         app(DeviceEventSimulator::class)->simulate();
         app(JamfSyncService::class)->restore();
-        $this->assertDatabaseHas('restore_tasks', ['status' => 'upstream_unassigned']);
+        $this->assertDatabaseMissing('deleted_assets', ['serial_code' => $a->serial_code]);
         $this->assertDatabaseCount('assets', 6);
         $b = Asset::where('provider_device_id', '102')->first();
         $this->deleteJson('/api/assets/'.$b->id);
@@ -102,7 +116,7 @@ class InventorySyncTest extends InventoryTestCase
         $this->write();
         app(DeviceEventSimulator::class)->simulate();
         app(JamfSyncService::class)->restore();
-        $this->assertDatabaseHas('restore_tasks', ['serial_code' => $b->serial_code, 'status' => 'upstream_missing']);
+        $this->assertDatabaseMissing('deleted_assets', ['serial_code' => $b->serial_code]);
     }
 
     public function test_unassigned_and_absent_are_removed_only_after_complete_snapshot(): void
@@ -178,6 +192,33 @@ class InventorySyncTest extends InventoryTestCase
         $this->write();
         $this->postJson('/api/sync')->assertStatus(422);
         $this->assertSame(8.0, Asset::where('provider_device_id', '102')->first()->specifications->ram_gb);
+    }
+
+    public function test_older_report_date_cannot_overwrite_newer_asset_state(): void
+    {
+        $this->sync();
+        $this->source['results'][0]['general']['reportDate'] = '2025-01-01T00:00:00Z';
+        $this->source['results'][0]['hardware']['totalRamMegabytes'] = 65536;
+        $this->write();
+
+        $this->postJson('/api/sync')->assertStatus(422);
+
+        $asset = Asset::where('provider_device_id', '101')->firstOrFail();
+        $this->assertSame(16.0, $asset->specifications->ram_gb);
+        $this->assertSame('2025-11-20 09:15:00', $asset->report_date->format('Y-m-d H:i:s'));
+    }
+
+    public function test_conflicting_immutable_model_metadata_rolls_back(): void
+    {
+        $this->sync();
+        $this->source['results'][0]['hardware']['processorType'] = 'Different processor';
+        $this->source['results'][0]['general']['reportDate'] = '2026-01-06T00:00:00Z';
+        $this->write();
+
+        $this->postJson('/api/sync')->assertStatus(422);
+
+        $asset = Asset::where('provider_device_id', '101')->firstOrFail();
+        $this->assertSame('Apple M1 Pro', $asset->deviceModel->processor_type);
     }
 
     public function test_missing_model_fields_preserve_reference_and_explicit_null_clears(): void

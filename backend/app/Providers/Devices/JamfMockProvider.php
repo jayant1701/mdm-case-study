@@ -67,9 +67,13 @@ final class JamfMockProvider implements DeviceProvider
             if ($r->model) {
                 $key = $r->model['manufacturer'].'|'.$r->model['model_identifier'];
                 if (isset($models[$key]) && $models[$key] !== $r->model) {
-                    $warnings[] = 'Conflicting model metadata for '.$key.'; sorted provider ID precedence applied.';
+                    foreach ($r->model as $field => $value) {
+                        if ($value !== null && ($models[$key][$field] ?? null) !== null && $models[$key][$field] !== $value) {
+                            throw new RuntimeException('Conflicting immutable model metadata for '.$key.' field '.$field.'.');
+                        }
+                    }
                 }
-                $models[$key] = array_merge($models[$key] ?? [], $r->model);
+                $models[$key] = array_replace($models[$key] ?? [], array_filter($r->model, fn ($value) => $value !== null));
             }
         }
         $records = array_map(fn ($r) => new DeviceRecord($r->providerId, $r->serial, $r->email, $r->email ? ($employees[$r->email] ?? $r->employee) : $r->employee, $r->model ? ($models[$r->model['manufacturer'].'|'.$r->model['model_identifier']] ?? $r->model) : null, $r->asset, $r->specifications, $r->preserveModel), $records);
@@ -103,16 +107,39 @@ final class JamfMockProvider implements DeviceProvider
         }
         $serial = $this->text($h['serialNumber'] ?? null);
         $serial = $serial ? strtoupper($serial) : null;
-        $employee = $this->fields($u, ['realname' => 'name', 'phone' => 'phone']);
+        $employee = $this->fields($u, ['username' => 'username', 'realname' => 'name', 'position' => 'position', 'phone' => 'phone']);
         $identifier = $this->text($h['modelIdentifier'] ?? null);
         $make = $this->text($h['make'] ?? null);
-        $model = $identifier && $make ? ['manufacturer' => $make, 'model_identifier' => $identifier] + $this->fields($h, ['model' => 'model_name']) : null;
+        $model = $identifier && $make ? ['manufacturer' => $make, 'model_identifier' => $identifier] + $this->fields($h, ['model' => 'model_name', 'processorType' => 'processor_type']) : null;
+        if ($model !== null) {
+            $model['platform'] = $this->text($general['platform'] ?? null);
+            if (array_key_exists('coreCount', $h)) {
+                $coreCount = $h['coreCount'];
+                if ($coreCount !== null && (! is_numeric($coreCount) || (float) $coreCount !== (float) (int) $coreCount || $coreCount < 0)) {
+                    throw new RuntimeException('Core count must be a non-negative integer.');
+                }
+                $model['core_count'] = $coreCount === null ? null : (int) $coreCount;
+            }
+        }
         $asset = ['device_name' => $this->text($general['name'] ?? null) ?? $this->text($h['model'] ?? null) ?? 'Unknown'];
         if (array_key_exists('udid', $row)) {
             $asset['udid'] = $this->text($row['udid']);
         }
         if (array_key_exists('reportDate', $general)) {
             $asset['report_date'] = $this->date($general['reportDate']);
+        }
+        if (array_key_exists('lastContactTime', $general)) {
+            $asset['last_contact_at'] = $this->date($general['lastContactTime']);
+        }
+        if (array_key_exists('site', $general)) {
+            if (! is_array($general['site'])) {
+                throw new RuntimeException('Invalid site value.');
+            }
+            $siteId = $this->text($general['site']['id'] ?? null);
+            $siteName = $this->text($general['site']['name'] ?? null);
+            $none = $siteId === '-1' || $siteName === null || strcasecmp($siteName, 'None') === 0;
+            $asset['site_provider_id'] = $none ? null : $siteId;
+            $asset['site_name'] = $none ? null : $siteName;
         }
         $purchasing = $row['purchasing'] ?? [];
         if (! is_array($purchasing)) {
@@ -127,17 +154,14 @@ final class JamfMockProvider implements DeviceProvider
         if (array_key_exists('poDate', $purchasing)) {
             $asset['purchase_date'] = $this->date($purchasing['poDate'], true);
         }
-        $specs = $this->fields($h, ['processorType' => 'processor_type']);
-        foreach (['totalRamMegabytes' => 'ram_gb', 'coreCount' => 'core_count', 'batteryCapacityPercent' => 'battery_capacity_percent'] as $source => $target) {
+        $specs = [];
+        foreach (['totalRamMegabytes' => 'ram_gb', 'batteryCapacityPercent' => 'battery_capacity_percent'] as $source => $target) {
             if (array_key_exists($source, $h)) {
                 $v = $h[$source];
                 if ($v !== null && (! is_numeric($v) || $v < 0)) {
                     throw new RuntimeException('Invalid numeric hardware field: '.$source);
                 }
-                if ($source === 'coreCount' && $v !== null && (float) $v !== (float) (int) $v) {
-                    throw new RuntimeException('Core count must be an integer.');
-                }
-                $specs[$target] = $v === null ? null : ($source === 'totalRamMegabytes' ? round((float) $v / 1024, 2) : ($source === 'coreCount' ? (int) $v : (float) $v));
+                $specs[$target] = $v === null ? null : ($source === 'totalRamMegabytes' ? round((float) $v / 1024, 2) : (float) $v);
             }
         }
         if (isset($row['storage']) && array_key_exists('disks', $row['storage'])) {

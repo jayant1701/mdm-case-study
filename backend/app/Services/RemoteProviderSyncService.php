@@ -3,15 +3,16 @@
 namespace App\Services;
 
 use App\Contracts\DeviceProvider;
+use App\Contracts\Persistence\DeletedAssetRepository;
+use App\Contracts\Persistence\EmployeeRepository;
 use App\Contracts\Persistence\EventStateRepository;
-use App\Contracts\Persistence\RestoreTaskRepository;
 use App\Contracts\RemoteProviderGateway;
 use App\Data\DeviceEvent;
 use RuntimeException;
 
 final class RemoteProviderSyncService
 {
-    public function __construct(private RemoteProviderGateway $provider, private DeviceProvider $fixture, private DeviceReconciler $reconciler, private EventStateRepository $states, private RestoreTaskRepository $restorations) {}
+    public function __construct(private RemoteProviderGateway $provider, private DeviceProvider $fixture, private DeviceReconciler $reconciler, private EventStateRepository $states, private DeletedAssetRepository $deletedAssets, private EmployeeRepository $employees) {}
 
     public function full(array &$counts): void
     {
@@ -56,22 +57,24 @@ final class RemoteProviderSyncService
 
     public function restore(array &$counts): void
     {
-        foreach ($this->restorations->pendingFor('jamf') as $task) {
-            $this->restorations->recordAttempt($task->id);
-            if (! $task->provider_device_id) {
-                throw new RuntimeException('Restoration requires a retained provider device ID.');
-            }
-            $event = $this->provider->current($task->provider_device_id);
+        foreach ($this->deletedAssets->recoverableFor('jamf') as $deletedAsset) {
+            $event = $this->provider->current($deletedAsset->provider_device_id);
             if (! $event) {
-                $this->restorations->resolve($task->id, 'upstream_missing');
+                $this->deletedAssets->remove($deletedAsset->id);
 
                 continue;
             }
-            if ($event->device->serial !== $task->serial_code) {
+            if ($event->device->serial !== $deletedAsset->serial_code) {
                 throw new RuntimeException('Restoration serial does not match retained identity.');
             }
             $this->apply($event, $counts);
-            $this->restorations->resolve($task->id, $event->state() === 'removed' ? 'upstream_missing' : ($event->device->email ? 'restored' : 'upstream_unassigned'));
+            $this->deletedAssets->remove($deletedAsset->id);
+        }
+        foreach ($this->employees->deletedEmployeeProviderIds('jamf') as $providerId) {
+            $event = $this->provider->current($providerId);
+            if ($event && $event->state() !== 'removed' && $event->device->email) {
+                $this->apply($event, $counts);
+            }
         }
     }
 

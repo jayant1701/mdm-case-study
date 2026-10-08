@@ -28,10 +28,10 @@ final class DemoControlService
             'provider_device_id' => $input['provider_device_id'],
             'serial_code' => strtoupper($input['serial_code']),
             'email' => strtolower($input['employee_email']),
-            'employee' => ['name' => $input['employee_name'], 'phone' => null],
-            'model' => ['manufacturer' => 'Demo', 'model_identifier' => 'DemoDevice1,1', 'model_name' => 'Provider Lab device'],
-            'asset' => ['device_name' => $input['device_name'], 'udid' => null, 'purchased' => null, 'purchase_date' => null, 'report_date' => null],
-            'specifications' => ['ram_gb' => (float) $input['ram_gb'], 'storage_gb' => null, 'processor_type' => null, 'core_count' => null, 'battery_capacity_percent' => null],
+            'employee' => ['username' => null, 'name' => $input['employee_name'], 'position' => null, 'phone' => null],
+            'model' => ['manufacturer' => 'Demo', 'model_identifier' => 'DemoDevice1,1', 'model_name' => 'Provider Lab device', 'platform' => null, 'processor_type' => null, 'core_count' => null],
+            'asset' => ['device_name' => $input['device_name'], 'udid' => null, 'purchased' => null, 'purchase_date' => null, 'report_date' => null, 'last_contact_at' => null, 'site_provider_id' => null, 'site_name' => null],
+            'specifications' => ['ram_gb' => (float) $input['ram_gb'], 'storage_gb' => null, 'battery_capacity_percent' => null],
         ]);
 
         return $this->providerChange('create', $change);

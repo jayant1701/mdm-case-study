@@ -16,4 +16,7 @@ interface EmployeeRepository
     public function details(int $id): Employee;
 
     public function deleteLocal(int $id): void;
+
+    /** Provider device IDs retained by assets of locally deleted employees. */
+    public function deletedEmployeeProviderIds(string $provider): array;
 }
