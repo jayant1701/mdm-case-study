@@ -1,4 +1,5 @@
 import React from "react";
+import { downloadPendingNotificationsCsv } from "./pendingNotificationsCsv.js";
 
 export function AssetList({
   assets,
@@ -150,6 +151,8 @@ export function AssetDetails({ asset, onClose }) {
 }
 
 export function Activity({ outbox, onRetryDelivery, busy }) {
+  const notifications = outbox.notifications || [];
+
   return (
     <>
       <h2>Notification delivery</h2>
@@ -170,9 +173,64 @@ export function Activity({ outbox, onRetryDelivery, busy }) {
             waiting for Kafka.
           </strong>
           <p>Process them now, or leave the automatic publisher to retry.</p>
-          <button disabled={busy} onClick={onRetryDelivery}>
-            Process pending notifications
-          </button>
+          <div className="activity-actions">
+            <button disabled={busy} onClick={onRetryDelivery}>
+              Process pending notifications
+            </button>
+            <button
+              disabled={busy || !notifications.length}
+              onClick={() => downloadPendingNotificationsCsv(notifications)}
+            >
+              Export pending CSV
+            </button>
+          </div>
+          <h3>Pending notifications</h3>
+          <div className="table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Device / serial</th>
+                  <th>Change</th>
+                  <th>Attempts</th>
+                  <th>Next retry</th>
+                </tr>
+              </thead>
+              <tbody>
+                {notifications.map((notification) => (
+                  <tr key={notification.event_id}>
+                    <td>
+                      <strong>
+                        {notification.device_name || "Unknown device"}
+                      </strong>
+                      <br />
+                      <code>
+                        {notification.serial_code || "Unknown serial"}
+                      </code>
+                    </td>
+                    <td>
+                      {(notification.type || "unknown")
+                        .replace("device.", "")
+                        .replaceAll("_", " ")}
+                    </td>
+                    <td>{notification.attempts}</td>
+                    <td>
+                      {notification.next_attempt_at
+                        ? new Date(
+                            notification.next_attempt_at,
+                          ).toLocaleString()
+                        : "Ready now"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {outbox.truncated && (
+            <p>
+              Showing the first {notifications.length} of {outbox.pending}{" "}
+              notifications. The CSV contains the displayed rows.
+            </p>
+          )}
         </section>
       )}
     </>

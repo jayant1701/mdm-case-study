@@ -20,7 +20,11 @@ function App() {
   const [events, setEvents] = useState([]);
   const [runs, setRuns] = useState([]);
   const [deletedAssets, setDeletedAssets] = useState([]);
-  const [outbox, setOutbox] = useState({ pending: 0 });
+  const [outbox, setOutbox] = useState({
+    pending: 0,
+    notifications: [],
+    truncated: false,
+  });
   const [page, setPage] = useState(1);
   const [lastPage, setLastPage] = useState(1);
   const [detail, setDetail] = useState(null);

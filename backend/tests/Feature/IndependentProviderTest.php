@@ -22,7 +22,14 @@ class IndependentProviderTest extends TestCase
         $controller = app(IndependentProviderController::class);
         $activity = $controller->outbox($outbox);
         $this->assertSame(7, $activity['pending']);
-        $this->assertSame(['pending'], array_keys($activity));
+        $this->assertFalse($activity['truncated']);
+        $this->assertCount(7, $activity['notifications']);
+        $first = $activity['notifications'][0];
+        $this->assertSame('101', $first['provider_device_id']);
+        $this->assertSame($this->source['results'][0]['hardware']['serialNumber'], $first['serial_code']);
+        $this->assertSame($this->source['results'][0]['general']['name'], $first['device_name']);
+        $this->assertSame('device.added', $first['type']);
+        $this->assertArrayNotHasKey('payload', $first);
         $this->app->instance(EventPublisher::class, new class implements EventPublisher
         {
             public function publish(array $payload): void

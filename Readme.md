@@ -41,7 +41,7 @@ The UI has four areas:
 
 - **Assets** lists devices. Details open directly below the selected row.
 - **Employees** lists active employees and their assigned assets.
-- **Activity** shows whether provider notifications are waiting. If any are pending, it offers a manual processing action.
+- **Activity** shows whether provider notifications are waiting. If any are pending, it lists their device name, serial, change type and retry state, offers a manual processing action, and can export the displayed rows as CSV.
 - **Testing** can reset the demo, create one deterministic delivery-failure state, list locally deleted devices and show technical sync/event history.
 
 `docker compose down` stops the application. `docker compose down -v` also deletes both MySQL volumes and the Kafka volume.
@@ -253,7 +253,7 @@ Provider endpoints are on port 8002 and own simulated source state:
 | POST | `/api/provider/import` | Import a complete raw Jamf-format response |
 | POST | `/api/provider/scan` | Compare the mounted fixture with provider state and emit semantic changes |
 | POST | `/api/provider/seed` | Initialize an empty provider store once |
-| GET | `/api/provider/outbox` | Pending notification count |
+| GET | `/api/provider/outbox` | Pending count and up to 100 notification summaries |
 | POST | `/api/provider/outbox/retry` | Immediately try up to ten pending notifications |
 | POST | `/api/provider/testing/reset` | Local/testing demo reset |
 | POST | `/api/provider/testing/kafka-failure` | Local/testing deterministic failure state |
@@ -274,7 +274,7 @@ Inventory endpoints are on port 8000:
 | POST | `/api/events/jamf` | HTTP/test ingestion into the durable inbox; Kafka runtime calls the same receiver directly |
 | GET | `/api/events` | Technical event-processing history |
 | POST | `/api/events/{id}/retry` | Retry a failed inventory event |
-| GET | `/api/provider-outbox` | Proxy provider pending count for Activity |
+| GET | `/api/provider-outbox` | Proxy pending count and notification summaries for Activity/CSV export |
 | POST | `/api/provider-outbox/retry` | Proxy manual outbox processing for Activity |
 | POST | `/api/simulator/jamf` | Technical fixture scan; not exposed in the UI |
 | POST | `/api/demo/reset` | Local/testing reset of provider fixture state and local inventory |
@@ -284,7 +284,7 @@ The demo reset/failure routes are registered only in local/testing environments.
 
 ## Verification
 
-The backend suite completed with exit code 0: **60 tests and 372 assertions**. PHPUnit also reports warnings because the mounted test workspace has no `backend/.env`; test configuration is supplied by `phpunit.xml`. The React production build completed successfully.
+The backend suite completed successfully: **60 tests and 378 assertions**. The React production build completed successfully.
 
 Automated tests cover initial/repeated sync, RAM and assignment changes, missing/invalid data, local deletion and recreation, provider CRUD, transactional outbox behavior, retries, duplicate/stale events, Kafka receipt/quarantine rules, timestamp-only suppression, remote reconciliation and adapter boundaries.
 
@@ -293,6 +293,8 @@ Browser checks confirmed:
 - reset followed by Sync Now restores the seven-device baseline;
 - asset details render under the selected row;
 - the deterministic failure remains pending across automatic publisher cycles;
+- Activity shows the pending device name, serial, change type and retry time;
+- the CSV export action completes for the displayed pending rows;
 - Activity manually publishes that one pending notification;
 - Activity then reports an empty outbox.
 

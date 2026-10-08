@@ -8,4 +8,4 @@ Deferred at the user's request. No navigation changes were made with the outbox 
 
 ## Activity and accessibility
 
-Replace raw sync counters in Testing with readable summaries, add device-specific action labels, and improve detail units. The navigation exposes its selected page through `aria-current`, asset details now render directly below the selected row, and Activity shows only outbox state. Other review items remain open.
+Replace raw sync counters in Testing with readable summaries, add device-specific action labels, and improve detail units. The navigation exposes its selected page through `aria-current`, asset details render directly below the selected row, and Activity is limited to outbox state with pending-device summaries and CSV export. Other review items remain open.

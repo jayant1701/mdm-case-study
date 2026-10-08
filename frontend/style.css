@@ -128,6 +128,15 @@ article {
   border-color: #d99d23;
   background: #fff8e6;
 }
+.activity-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.pending .table {
+  background: white;
+}
 .testing-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
