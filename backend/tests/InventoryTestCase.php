@@ -16,6 +16,7 @@ abstract class InventoryTestCase extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        config(['mdm.provider_mode' => 'local']);
         $this->fixture = tempnam(sys_get_temp_dir(), 'mdm');
         $this->source = json_decode(file_get_contents(base_path('../files/api-mock-response.json')), true);
         config(['mdm.mock_path' => $this->fixture]);

@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use App\Contracts\DeviceProvider;
+use App\Contracts\EventPublisher;
 use App\Contracts\Persistence\AssetRepository;
 use App\Contracts\Persistence\DeviceModelRepository;
 use App\Contracts\Persistence\EmployeeRepository;
@@ -13,7 +14,10 @@ use App\Contracts\Persistence\ProviderLockRepository;
 use App\Contracts\Persistence\RestoreTaskRepository;
 use App\Contracts\Persistence\SyncRunRepository;
 use App\Contracts\Persistence\TransactionBoundary;
+use App\Contracts\RemoteProviderGateway;
 use App\Contracts\TargetedDeviceProvider;
+use App\Messaging\KafkaEventPublisher;
+use App\Providers\Devices\HttpMockProviderAdapter;
 use App\Providers\Devices\JamfMockProvider;
 use App\Providers\Devices\MockProviderAdapter;
 use App\Repositories\Eloquent\DatabaseProviderLockRepository;
@@ -32,8 +36,10 @@ class AppServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
+        $this->app->bind(EventPublisher::class, KafkaEventPublisher::class);
         $this->app->bind(DeviceProvider::class, JamfMockProvider::class);
-        $this->app->bind(TargetedDeviceProvider::class, MockProviderAdapter::class);
+        $this->app->bind(RemoteProviderGateway::class, HttpMockProviderAdapter::class);
+        $this->app->bind(TargetedDeviceProvider::class, fn ($app) => $app->make(config('mdm.provider_mode') === 'remote' ? HttpMockProviderAdapter::class : MockProviderAdapter::class));
         foreach ([
             AssetRepository::class => EloquentAssetRepository::class,
             MockProviderRepository::class => EloquentMockProviderRepository::class,

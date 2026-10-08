@@ -9,6 +9,8 @@ use Illuminate\Support\Collection;
 
 interface EventStateRepository
 {
+    public function maximumConsumerGeneration(string $provider): int;
+
     public function producerStates(string $provider): Collection;
 
     public function producerState(string $provider, string $id): ?SimulatedProviderDevice;

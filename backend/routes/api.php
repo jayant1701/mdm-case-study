@@ -5,6 +5,12 @@ use App\Http\Controllers\InventoryController;
 use App\Http\Controllers\MockProviderController;
 use Illuminate\Support\Facades\Route;
 
+if (config('mdm.role') === 'provider') {
+    require __DIR__.'/provider-api.php';
+
+    return;
+}
+
 Route::get('/assets', [InventoryController::class, 'assets']);
 Route::get('/assets/{asset}', [InventoryController::class, 'asset']);
 Route::get('/employees', [InventoryController::class, 'employees']);
@@ -18,9 +24,11 @@ Route::get('/events', [EventController::class, 'index']);
 Route::post('/events/jamf', [EventController::class, 'store']);
 Route::post('/events/{event}/retry', [EventController::class, 'retry']);
 Route::post('/simulator/jamf', [EventController::class, 'simulate']);
-Route::get('/provider/jamf/devices/{device}', [MockProviderController::class, 'show']);
-Route::post('/provider/jamf/devices', [MockProviderController::class, 'store']);
-Route::patch('/provider/jamf/devices/{device}', [MockProviderController::class, 'update']);
-Route::delete('/provider/jamf/devices/{device}', [MockProviderController::class, 'destroy']);
-Route::post('/provider/jamf/seed', [MockProviderController::class, 'seed']);
+if (config('mdm.provider_mode') === 'local') {
+    Route::get('/provider/jamf/devices/{device}', [MockProviderController::class, 'show']);
+    Route::post('/provider/jamf/devices', [MockProviderController::class, 'store']);
+    Route::patch('/provider/jamf/devices/{device}', [MockProviderController::class, 'update']);
+    Route::delete('/provider/jamf/devices/{device}', [MockProviderController::class, 'destroy']);
+    Route::post('/provider/jamf/seed', [MockProviderController::class, 'seed']);
+}
 Route::post('/sync/provider', [InventoryController::class, 'syncProvider']);

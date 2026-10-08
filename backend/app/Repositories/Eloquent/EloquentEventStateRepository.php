@@ -12,6 +12,11 @@ use Illuminate\Support\Facades\DB;
 
 final class EloquentEventStateRepository implements EventStateRepository
 {
+    public function maximumConsumerGeneration(string $provider): int
+    {
+        return (int) DeviceEventState::where('provider', $provider)->max('producer_generation');
+    }
+
     public function producerStates(string $provider): Collection
     {
         return SimulatedProviderDevice::where('provider', $provider)->get()->keyBy('provider_device_id');

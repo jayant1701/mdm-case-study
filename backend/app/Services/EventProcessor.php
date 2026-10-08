@@ -36,7 +36,7 @@ final class EventProcessor
                     return;
                 }
                 if ($previous && $version === $previous->version) {
-                    if ($previous->fingerprint !== $event->revisionHash()) {
+                    if (DeviceEvent::semanticHash($previous->device, $previous->state) !== DeviceEvent::semanticHash($event->envelope['device'], $event->state())) {
                         throw new ConflictHttpException('Conflicting payload at an applied device version.');
                     }$this->events->markSucceeded($inboxId, 'ignored_duplicate');
 

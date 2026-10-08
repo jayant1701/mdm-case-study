@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Contracts\Persistence\EventInboxRepository;
+use App\Contracts\RemoteProviderGateway;
 use App\Services\DeviceEventSimulator;
 use App\Services\EventReceiver;
 use Illuminate\Http\Request;
@@ -25,6 +26,10 @@ final class EventController extends Controller
 
     public function simulate(DeviceEventSimulator $simulator)
     {
+        if (config('mdm.provider_mode') === 'remote') {
+            return response()->json(app(RemoteProviderGateway::class)->scan(), 202);
+        }
+
         return response()->json($simulator->simulate(), 202);
     }
 

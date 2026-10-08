@@ -18,6 +18,11 @@ final class JamfSyncService
     public function full(): SyncRun
     {
         return $this->run('full', function (array &$counts) {
+            if (config('mdm.provider_mode') === 'remote') {
+                app(RemoteProviderSyncService::class)->full($counts);
+
+                return;
+            }
             $snapshot = $this->provider->snapshot();
             $counts['warnings'] = $snapshot->warnings;
             $this->reconciler->validateIdentities($snapshot->devices);
@@ -45,6 +50,11 @@ final class JamfSyncService
     public function reconcileProvider(): SyncRun
     {
         return $this->run('provider', function (array &$counts) {
+            if (config('mdm.provider_mode') === 'remote') {
+                app(RemoteProviderSyncService::class)->reconcile($counts);
+
+                return;
+            }
             $snapshot = $this->targeted->snapshot();
             $this->reconciler->validateIdentities($snapshot->devices);
             $fence = $this->simulator->capture($snapshot, true);
@@ -58,6 +68,11 @@ final class JamfSyncService
     public function restore(): SyncRun
     {
         return $this->run('restore', function (array &$counts) {
+            if (config('mdm.provider_mode') === 'remote') {
+                app(RemoteProviderSyncService::class)->restore($counts);
+
+                return;
+            }
             foreach ($this->restorations->pendingFor('jamf') as $task) {
                 $this->restorations->recordAttempt($task->id);
                 if (! $task->provider_device_id) {

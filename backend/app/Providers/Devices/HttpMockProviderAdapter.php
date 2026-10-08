@@ -18,7 +18,12 @@ final class HttpMockProviderAdapter implements RemoteProviderGateway
         }
         $response->throw();
 
-        return DeviceEvent::parse($response->json());
+        $event = DeviceEvent::parse($response->json());
+        if ($event->device->providerId !== $providerId) {
+            throw new RuntimeException('Provider lookup returned a different device identity.');
+        }
+
+        return $event;
     }
 
     public function snapshot(): DeviceSnapshot
@@ -99,6 +104,6 @@ final class HttpMockProviderAdapter implements RemoteProviderGateway
 
     private function url(string $path): string
     {
-        return rtrim(config('mdm.provider_url','http://mock-provider:8000/api/provider'), '/').$path;
+        return rtrim(config('mdm.provider_url', 'http://mock-provider:8000/api/provider'), '/').$path;
     }
 }
