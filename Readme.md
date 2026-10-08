@@ -110,6 +110,31 @@ Use event-driven synchronization for normal provider changes. The Kafka consumer
 
 Kafka persists records on broker storage for a configured retention period; the local environment retains them for seven days on a Docker volume. That allows a consumer to resume or replay retained events. Kafka persistence does not make a provider database update and Kafka publication one atomic operation. The provider outbox makes the state change and notification atomic in MySQL, and the inventory inbox saves the received event before the Kafka offset is committed.
 
+#### Required behavior and enhancement
+
+The assignment's baseline behavior is user-initiated synchronization: Laravel reads the supplied Jamf-format response, imports assigned devices and updates MySQL when synchronization is requested. That path remains available through `POST /api/sync`.
+
+The implementation adds an event-driven path. Provider changes create outbox notifications, the publisher sends them to Kafka, and a continuously running consumer applies them without waiting for Sync Now. This is an intentional enhancement beyond the baseline requirement.
+
+Continuous Kafka polling is better than relying only on Sync Now for normal changes because it:
+
+- does not wait for a user to notice a change and click a button;
+- reads only queued change events rather than fetching the complete provider inventory;
+- lets Kafka retain events while the inventory service is unavailable;
+- buffers bursts so the worker can process them at its available rate.
+
+The consumer polls Kafka with a blocking wait; it does not repeatedly query Jamf. Sync Now remains better for completeness because an event stream cannot prove that the entire local inventory matches the provider or rediscover a locally deleted record when nothing changed upstream.
+
+Sync Now is implemented as follows:
+
+1. React sends `POST /api/sync/provider` to the inventory API.
+2. `InventoryController` calls `JamfSyncService::reconcileProvider()`.
+3. `RemoteProviderSyncService` uses `RemoteProviderGateway` to retry up to ten pending provider-outbox notifications to Kafka.
+4. The HTTP provider adapter requests the complete versioned provider snapshot.
+5. The service validates snapshot generation, device identities and versions before applying data.
+6. `DeviceReconciler` creates or updates assigned assets and employees, restores valid local deletions, and removes assets that are absent, removed or unassigned upstream.
+7. `JamfSyncService` stores the reconciliation and outbox counters in `sync_runs`.
+
 Key decisions:
 
 | Question | Decision | Reason |
