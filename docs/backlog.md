@@ -12,4 +12,4 @@ Bring the details panel into view and move focus to its heading, or use a visibl
 
 ## Activity and accessibility
 
-Replace raw sync counters with readable summaries, add selected navigation semantics and device-specific action labels, and improve detail units. Outbox delivery and inventory processing are now separate sections; other review items remain open.
+Replace raw sync counters in Testing with readable summaries, add device-specific action labels, and improve detail units. The navigation now exposes its selected page through `aria-current`. Activity shows only outbox state; other review items remain open.

@@ -54,4 +54,4 @@ Company-based worker partitions and database shards can spread customer traffic.
 
 ## Delivery activity
 
-The inventory Activity page proxies provider-owned outbox status over HTTP. It shows waiting versus acknowledged publication independently from inventory processing. Manual retry immediately drains at most ten pending messages using the same publisher as automatic retries; published rows are excluded. A failed publish remains pending with its error and attempt count. Provider database credentials never reach the inventory service. The controls are intended for local development; production needs authorization.
+The inventory Activity page proxies only the provider-owned pending outbox count over HTTP. It reports empty or waiting state and offers manual processing when needed. The Testing page contains JSON controls and technical inventory processing history. Manual processing drains at most ten pending messages using the same publisher as automatic retries; published rows are excluded. Provider database credentials never reach the inventory service. The controls are intended for local development; production needs authorization.

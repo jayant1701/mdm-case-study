@@ -21,8 +21,8 @@ docker compose up --build
 - Mock provider API: http://localhost:8002/api/provider/snapshot
 - Startup loads the supplied JSON into the provider store once. The worker imports seven assigned assets and six employees.
 - **Sync Now** reads the current provider store and reconciles the local inventory.
-- **Import source JSON** reads the supplied file and updates both stores. This can overwrite provider API changes.
-- **Activity** shows events, results, retries and restoration actions.
+- **Testing** contains mock JSON import/scan controls, local restoration and technical processing history.
+- **Activity** shows only whether the provider outbox is empty and provides a manual process button when notifications are waiting.
 
 Docker runs React, the inventory API, inventory MySQL, the provider API, provider MySQL, an outbox publisher, Kafka, a Kafka consumer and an inventory job worker. Separate named volumes retain both databases and Kafka records. `docker compose down` stops the application; adding `-v` deletes those volumes.
 
@@ -287,7 +287,7 @@ Removing assets because they are missing from a response requires a complete sna
 
 ## Verification
 
-Passed: 56 backend tests with 341 assertions, and the React production build.
+Passed: 56 backend tests with 340 assertions, and the React production build.
 
 Tests cover provider changes, event persistence, retries, duplicate/stale messages, timestamp suppression, partial fields, restoration and employee deletion. Docker/MySQL checks also verified provider CRUD, queued processing, restoration with older pending events and employee reactivation.
 
@@ -317,9 +317,9 @@ The current implementation is a local case study with separate provider/inventor
 
 ## Outbox delivery controls
 
-Activity separates Delivery to Kafka from Inventory processing. Waiting for Kafka means the provider outbox event has not received broker acknowledgment. Published to Kafka does not mean the inventory worker has finished. Each notification shows its device name, delivery attempts and last delivery error.
+Activity reports whether the provider outbox is empty. A non-empty outbox means one or more notifications have not received Kafka acknowledgment. Detailed event and synchronization results are kept under Testing.
 
-Retry pending delivery immediately attempts up to ten pending outbox notifications through the provider API. Published notifications are not resent. Automatic delivery retries continue in the background. All events use the outbox, including when Kafka is healthy; it is not only an outage fallback. If the provider cannot be reached, inventory remains usable and Activity reports the unavailable outbox.
+Process pending notifications immediately attempts up to ten pending outbox notifications through the provider API. Published notifications are not resent. Automatic delivery retries continue in the background. All events use the outbox, including when Kafka is healthy; it is not only an outage fallback. If the provider cannot be reached, inventory remains usable and Activity reports the unavailable outbox.
 
 Provider endpoints: GET /api/provider/outbox and POST /api/provider/outbox/retry on port 8002. Inventory proxies: GET /api/provider-outbox and POST /api/provider-outbox/retry on port 8000. These unauthenticated controls are for the local demonstration; production requires restricted access.
 
