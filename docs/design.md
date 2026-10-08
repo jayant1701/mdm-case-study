@@ -101,3 +101,15 @@ Assets list/details, employee list with asset links, local delete confirmations,
 Substantive tests cover required sync behavior, source-free worker/retry with broken file, ignored timestamps, same-timestamp hardware updates, duplicate/version conflicts, tombstones, shared ordering, full-sync fencing, outbox/baseline atomic rollback and acknowledgment rollback. Frontend build and Docker/MySQL runtime checks are reported with exact measured counts in README/delivery.
 
 Future work: verified Jamf complete-event semantics/authentication, tenant scope, scheduled authoritative reconciliation, retention/stale-run cleanup and operational monitoring. No real webhook integration or provider sequence guarantee is invented. Legacy ID-only pending records fail validation visibly. Kafka/serverless are deployment options beyond this local demonstration.
+
+## Final provider CRUD and restoration roadmap
+
+1. Add an indexed mock-provider store seeded once from the original fixture, a repository and target adapter. It is a separate logical provider boundary hosted in the same local Laravel process/database; it is not real Jamf.
+2. Expose provider GET-by-ID, POST, PATCH and DELETE. Meaningful mutations commit provider state and complete inbox/outbox notifications atomically. Timestamp-only patches update provider metadata without events. Partial PATCH preserves omitted properties; explicit null clears them.
+3. Keep required direct-file full import explicit. File edits reach the provider store through import/scan. Normal Sync Now reconciles current provider state after seeding; a separate Import source JSON action performs the required file workflow and intentionally replaces current provider state.
+4. Restore local deletions through indexed provider GET-by-ID, never a full JSON scan. Verify retained serial and fence device/shared metadata checkpoints before applying current state, so queued older state cannot undo restoration.
+5. Normalize complete payloads by merging absent optional source fields with prior producer state, while explicit null clears and missing model identity preserves. Add the review regressions.
+6. Employee local deletion becomes a minimal tombstone retaining ID/email; asset links remain and render Deleted user plus email. Active employee list excludes it; source sync restores it in place.
+7. Verify provider CRUD -> durable payload -> worker -> inventory, target lookup without any file reads, tombstone identity and rollback/idempotence, then Docker/browser checks.
+
+Provider mutations are developer simulator endpoints; they do not add manual create/edit to inventory UI. A raw mounted-file edit is not automatically a provider mutation until imported/scanned. Targeted restore reads the current provider store, which resolves the previous restoration ordering bug without reintroducing a hidden full-file read.
