@@ -70,6 +70,15 @@ final readonly class DeviceEvent
     public static function semanticHash(array $device, string $state): string
     {
         unset($device['asset']['report_date']);
+        // MySQL JSON may round-trip 16.0 as 16; compare normalized hardware numbers.
+        foreach (['ram_gb', 'storage_gb', 'battery_capacity_percent'] as $field) {
+            if (isset($device['specifications'][$field])) {
+                $device['specifications'][$field] = (float) $device['specifications'][$field];
+            }
+        }
+        if (isset($device['specifications']['core_count'])) {
+            $device['specifications']['core_count'] = (int) $device['specifications']['core_count'];
+        }
 
         return self::hash(['state' => $state, 'device' => $device]);
     }
