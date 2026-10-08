@@ -12,9 +12,8 @@
 8. [Deletion and reconciliation](#8-deletion-and-reconciliation)
 9. [Failure handling and Activity](#9-failure-handling-and-activity)
 10. [API endpoints](#10-api-endpoints)
-11. [Alternatives and capacity](#11-alternatives-and-capacity)
-12. [Serverless alternative and cost](#12-serverless-alternative-and-cost)
-13. [Verification](#13-verification)
+11. [Serverless alternative and cost](#11-serverless-alternative-and-cost)
+12. [Verification](#12-verification)
 
 ## 1. Case study
 
@@ -54,6 +53,62 @@ The supplied task asks for a Laravel, React and MySQL application that:
 | Future providers | Provider contracts have concrete Jamf/mock adapters |
 
 One employee can own several assets. Each asset has at most one current employee, so `assets.employee_id` is sufficient. A join table would be needed for assignment history or simultaneous many-to-many ownership.
+
+### Solutions considered
+
+| Solution | Decision |
+|---|---|
+| Full synchronization | Keep for initial import and recovery; wasteful for every change |
+| Scheduled polling | Simple fallback, but repeatedly transfers unchanged data |
+| `reportDate` cursor | Reject without a guarantee that all changes and removals update it |
+| Increasing device ID | Reject; misses edits, unassignments and removals |
+| Purchase-date filter | Reject for change detection; later changes do not alter purchase date |
+| ID-only event plus provider GET | Valid and smaller, but adds a request and provider dependency |
+| Complete-state event | Chosen; replay works without a provider read |
+| Changed-fields-only event | Reject; partial merging makes ordering and replay harder |
+| Direct outbox-to-HTTP | Simpler for one consumer; Kafka demonstrates buffering and replay |
+| Kafka | Implemented with the transactional outbox |
+| Serverless deployment | Viable infrastructure alternative, described below |
+| gRPC | Unnecessary for query/control traffic; it does not solve persistence or detection |
+| Version/hash batch API | Useful future reconciliation optimization; absent from supplied contract |
+
+### Back-of-the-envelope estimate
+
+Planning assumptions from the design discussion, not assignment facts or benchmarks:
+
+- 100 customers;
+- 10,000 to 1,000,000 devices per customer: 1 million to 100 million total;
+- 10% annual additions/departures plus 1% replacements;
+- one event per affected device: 11% of the fleet per year;
+- 2 KB per complete event and 250 bytes per ID-only event.
+
+| Total devices | Events/year at 11% | Average events/second | Complete-event traffic/year | ID-only traffic/year |
+|---|---:|---:|---:|---:|
+| 1 million | 110,000 | 0.0035 | 0.22 GB | 0.0275 GB |
+| 100 million | 11 million | 0.35 | 22 GB | 2.75 GB |
+
+At 2 KB per device, one complete import transfers about 2 GB to 200 GB. A daily complete import transfers about 730 GB to 73 TB per year, mostly unchanged data.
+
+Complete events add about 0.19 GB to 19.25 GB per year over ID-only events. With 30-day retention and three copies, the difference is about 0.047 GB to 4.75 GB. Three copies are a planning assumption; the local Kafka broker has one replica.
+
+If every device emitted one event per day, the average becomes about 12 to 1,157 events per second. Routine report/contact timestamps are therefore excluded from the event fingerprint. Kafka can buffer a burst, while database and worker capacity determine how quickly it clears.
+
+Kafka already supports horizontal scaling. The expected load does not justify adding consumer partitions or database shards to this case study. Future changes should follow measurements:
+
+- slow pending-row selection: add a composite outbox index for the actual query, such as status, retry time and ID;
+- growing consumer lag: add partitions and consumers;
+- one provider/customer being throttled: schedule work fairly by company;
+- measured database throughput or storage limit: consider company-based sharding.
+
+For a multi-customer product, add `company_id` to identities and queries so two companies can safely have the same email, serial or provider ID and cannot access each other's data. This is a data-isolation requirement before it is a sharding strategy.
+
+### Recommendation
+
+Use event-driven synchronization for provider changes: commit provider state and an outbox event together, publish the event to Kafka, then apply it through a durable inventory inbox. This avoids transferring the complete fleet for every change, handles bursts and lets the provider and inventory services recover independently.
+
+The Kafka consumer runs continuously and waits for queued events. It does not poll Jamf or request the full device list. Making it wait for a user to click **Sync Now** would turn automatic event handling into user-triggered batch processing.
+
+Keep **Sync Now** as a separate complete-snapshot reconciliation. It repairs drift after a missed or rejected event and provides the assignment-compatible JSON import path. Event processing handles normal changes; reconciliation verifies the final state.
 
 ### Delivered scope
 
@@ -554,57 +609,7 @@ Demo reset/failure and Provider Lab routes are registered only for local/testing
 
 The local operational endpoints are unauthenticated for this case study. They need restricted, company-scoped access before a multi-customer deployment.
 
-## 11. Alternatives and capacity
-
-### Solutions considered
-
-| Solution | Decision |
-|---|---|
-| Full synchronization | Keep for initial import and recovery; wasteful for every change |
-| Scheduled polling | Simple fallback, but repeatedly transfers unchanged data |
-| `reportDate` cursor | Reject without a guarantee that all changes and removals update it |
-| Increasing device ID | Reject; misses edits, unassignments and removals |
-| Purchase-date filter | Reject for change detection; later changes do not alter purchase date |
-| ID-only event plus provider GET | Valid and smaller, but adds a request and provider dependency |
-| Complete-state event | Chosen; replay works without a provider read |
-| Changed-fields-only event | Reject; partial merging makes ordering and replay harder |
-| Direct outbox-to-HTTP | Simpler for one consumer; Kafka demonstrates buffering and replay |
-| Kafka | Implemented with the transactional outbox |
-| Serverless deployment | Viable infrastructure alternative, described below |
-| gRPC | Unnecessary for query/control traffic; it does not solve persistence or detection |
-| Version/hash batch API | Useful future reconciliation optimization; absent from supplied contract |
-
-### Back-of-the-envelope estimate
-
-Planning assumptions from the design discussion, not assignment facts or benchmarks:
-
-- 100 customers;
-- 10,000 to 1,000,000 devices per customer: 1 million to 100 million total;
-- 10% annual additions/departures plus 1% replacements;
-- one event per affected device: 11% of the fleet per year;
-- 2 KB per complete event and 250 bytes per ID-only event.
-
-| Total devices | Events/year at 11% | Average events/second | Complete-event traffic/year | ID-only traffic/year |
-|---|---:|---:|---:|---:|
-| 1 million | 110,000 | 0.0035 | 0.22 GB | 0.0275 GB |
-| 100 million | 11 million | 0.35 | 22 GB | 2.75 GB |
-
-At 2 KB per device, one complete import transfers about 2 GB to 200 GB. A daily complete import transfers about 730 GB to 73 TB per year, mostly unchanged data.
-
-Complete events add about 0.19 GB to 19.25 GB per year over ID-only events. With 30-day retention and three copies, the difference is about 0.047 GB to 4.75 GB. Three copies are a planning assumption; the local Kafka broker has one replica.
-
-If every device emitted one event per day, the average becomes about 12 to 1,157 events per second. Routine report/contact timestamps are therefore excluded from the event fingerprint. Kafka can buffer a burst, while database and worker capacity determine how quickly it clears.
-
-Kafka already supports horizontal scaling. The expected load does not justify adding consumer partitions or database shards to this case study. Future changes should follow measurements:
-
-- slow pending-row selection: add a composite outbox index for the actual query, such as status, retry time and ID;
-- growing consumer lag: add partitions and consumers;
-- one provider/customer being throttled: schedule work fairly by company;
-- measured database throughput or storage limit: consider company-based sharding.
-
-For a multi-customer product, add `company_id` to identities and queries so two companies can safely have the same email, serial or provider ID and cannot access each other's data. This is a data-isolation requirement before it is a sharding strategy.
-
-## 12. Serverless alternative and cost
+## 11. Serverless alternative and cost
 
 An alternative deployment can keep the same domain and adapter boundaries while replacing always-running processes:
 
@@ -636,7 +641,7 @@ Logging cost should be controlled at the source: structured error/state-transiti
 
 A previous Prime Video subscription and buy/rent workload serving millions of customers in North America cost the team about 7–8k per month. Its currency, traffic profile and service breakdown were not supplied, so it is context rather than this system's forecast. It shows that customer traffic and observability can cost much more than the small event path above.
 
-## 13. Verification
+## 12. Verification
 
 The backend suite completed with **66 tests and 438 assertions**. Laravel formatting and the React production build also completed successfully.
 
