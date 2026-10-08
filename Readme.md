@@ -54,24 +54,6 @@ The supplied task asks for a Laravel, React and MySQL application that:
 
 One employee can own several assets. Each asset has at most one current employee, so `assets.employee_id` is sufficient. A join table would be needed for assignment history or simultaneous many-to-many ownership.
 
-### Solutions considered
-
-| Solution | Decision |
-|---|---|
-| Full synchronization | Keep for initial import and recovery; wasteful for every change |
-| Scheduled polling | Simple fallback, but repeatedly transfers unchanged data |
-| `reportDate` cursor | Reject without a guarantee that all changes and removals update it |
-| Increasing device ID | Reject; misses edits, unassignments and removals |
-| Purchase-date filter | Reject for change detection; later changes do not alter purchase date |
-| ID-only event plus provider GET | Valid and smaller, but adds a request and provider dependency |
-| Complete-state event | Chosen; replay works without a provider read |
-| Changed-fields-only event | Reject; partial merging makes ordering and replay harder |
-| Direct outbox-to-HTTP | Simpler for one consumer; Kafka demonstrates buffering and replay |
-| Kafka | Implemented with the transactional outbox |
-| Serverless deployment | Viable infrastructure alternative, described below |
-| gRPC | Unnecessary for query/control traffic; it does not solve persistence or detection |
-| Version/hash batch API | Useful future reconciliation optimization; absent from supplied contract |
-
 ### Back-of-the-envelope estimate
 
 Planning assumptions from the design discussion, not assignment facts or benchmarks:
@@ -93,6 +75,8 @@ Complete events add about 0.19 GB to 19.25 GB per year over ID-only events. With
 
 If every device emitted one event per day, the average becomes about 12 to 1,157 events per second. Routine report/contact timestamps are therefore excluded from the event fingerprint. Kafka can buffer a burst, while database and worker capacity determine how quickly it clears.
 
+The estimate leads to two conclusions. Repeated complete synchronization is expensive because it reads and transfers the entire provider inventory even when most devices are unchanged. Incremental events should handle normal changes, while a complete snapshot remains necessary as a less frequent correctness check. The average event rate alone does not require Kafka; Kafka was selected for persistent retention, replay, burst buffering and separation between the provider and inventory services.
+
 Kafka already supports horizontal scaling. The expected load does not justify adding consumer partitions or database shards to this case study. Future changes should follow measurements:
 
 - slow pending-row selection: add a composite outbox index for the actual query, such as status, retry time and ID;
@@ -102,9 +86,42 @@ Kafka already supports horizontal scaling. The expected load does not justify ad
 
 For a multi-customer product, add `company_id` to identities and queries so two companies can safely have the same email, serial or provider ID and cannot access each other's data. This is a data-isolation requirement before it is a sharding strategy.
 
+### Solutions considered
+
+| Solution | Decision |
+|---|---|
+| Full synchronization | Keep for initial import and recovery; wasteful for every change |
+| Scheduled polling | Simple fallback, but repeatedly transfers unchanged data |
+| `reportDate` cursor | Reject without a guarantee that all changes and removals update it |
+| Increasing device ID | Reject; misses edits, unassignments and removals |
+| Purchase-date filter | Reject for change detection; later changes do not alter purchase date |
+| ID-only event plus provider GET | Valid and smaller, but adds a request and provider dependency |
+| Complete-state event | Chosen; replay works without a provider read |
+| Changed-fields-only event | Reject; partial merging makes ordering and replay harder |
+| Direct outbox-to-HTTP | Simpler for one consumer; Kafka provides retained replay and burst buffering |
+| Kafka | Chosen with a transactional outbox; the decision is about durability and decoupling, not average throughput |
+| Serverless deployment | Viable infrastructure alternative, described below |
+| gRPC | Unnecessary for query/control traffic; it does not solve persistence or change detection |
+| Version/hash batch API | Useful future reconciliation optimization; absent from the supplied contract |
+
 ### Recommendation
 
-Use event-driven synchronization for normal provider changes. The Kafka consumer waits continuously for small change events, so updates do not depend on a user clicking a button and the complete fleet is not transferred for each change. Kafka also buffers bursts and lets the provider and inventory services recover independently. The consumer polls Kafka only; it does not poll Jamf.
+Use event-driven synchronization for normal provider changes. The Kafka consumer waits continuously for small change events, so updates do not depend on a user clicking a button and the complete fleet is not transferred for each change. The consumer polls Kafka only; it does not poll Jamf.
+
+Kafka persists records on broker storage for a configured retention period; the local environment retains them for seven days on a Docker volume. That allows a consumer to resume or replay retained events. Kafka persistence does not make a provider database update and Kafka publication one atomic operation. The provider outbox makes the state change and notification atomic in MySQL, and the inventory inbox saves the received event before the Kafka offset is committed.
+
+Key decisions:
+
+| Question | Decision | Reason |
+|---|---|---|
+| How are normal changes synchronized? | Complete-state events | Transfer only changed devices and replay without a provider lookup |
+| How is drift repaired? | Complete snapshot reconciliation | Recover missed events, local deletions and an empty inventory |
+| Why Kafka? | Persistent event transport | Retained replay, burst buffering and service independence |
+| Why a MySQL outbox when Kafka persists events? | Transactional outbox | Kafka cannot participate in the provider's MySQL transaction |
+| Why an inventory inbox? | Persist before acknowledging Kafka | Prevent an acknowledged event from being lost before inventory processing |
+| How are duplicates and late events handled? | Event ID, device version and provider generation | Make at-least-once delivery safe and prevent older state from winning |
+| How are provider differences isolated? | Adapter interfaces | Keep Jamf-specific HTTP and response mapping outside synchronization rules |
+| How is repeated model data reduced? | Device model plus per-asset attributes | Share fixed model configuration while keeping RAM, storage and battery per asset |
 
 | Operation | Trigger | Purpose |
 |---|---|---|
