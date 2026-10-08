@@ -108,7 +108,7 @@ Use event-driven synchronization for provider changes: commit provider state and
 
 The Kafka consumer runs continuously and waits for queued events. It does not poll Jamf or request the full device list. Making it wait for a user to click **Sync Now** would turn automatic event handling into user-triggered batch processing.
 
-Keep **Sync Now** as a separate complete-snapshot reconciliation. It repairs drift after a missed or rejected event and provides the assignment-compatible JSON import path. Event processing handles normal changes; reconciliation verifies the final state.
+**Sync Now** implements the required provider-fetch workflow: React calls the Laravel inventory API, Laravel asks the Jamf adapter for the provider's complete current device list, and Laravel compares that list with MySQL. It is used for the initial import and whenever the user wants to make MySQL match Jamf again. Kafka events are an additional automatic path for individual changes; they do not replace Sync Now. If an event is missed or cannot be processed, the next Sync Now fetch corrects the difference.
 
 ### Delivered scope
 
