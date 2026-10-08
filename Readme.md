@@ -33,10 +33,6 @@ The supplied task asks for a Laravel, React and MySQL application that:
 - reflects assignment and attribute changes, such as a RAM update;
 - runs locally with Docker Compose.
 
-The original reference implementation is in `files/RefJamfSyncService.php`, and the supplied UI wireframe is in `files/ui_design_wireframe.png`. The assignment describes a six-hour case study and does not require production infrastructure.
-
-The original submission note asks that GitHub reviewers `@gumacs92` and `@omarsh99` receive repository access.
-
 ### Definitions
 
 - **Asset:** a physical device assigned to an employee. Unassigned provider devices are not kept in local inventory.
