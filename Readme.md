@@ -54,23 +54,6 @@ The supplied task asks for a Laravel, React and MySQL application that:
 
 One employee can own several assets. Each asset has at most one current employee, so `assets.employee_id` is sufficient. A join table would be needed for assignment history or simultaneous many-to-many ownership.
 
-### Solutions considered
-
-| Solution | Use / drawback |
-|---|---|
-| Full synchronization | Keep for initial import and recovery; wasteful for every change |
-| Scheduled polling | Simple fallback, but repeatedly transfers unchanged data |
-| `reportDate` cursor | Reject without a guarantee that all changes and removals update it |
-| Increasing device ID | Reject; misses edits, unassignments and removals |
-| Purchase-date filter | Reject for change detection; later changes do not alter purchase date |
-| ID-only event plus provider GET | Valid and smaller, but adds a request and provider dependency |
-| Complete-state event | Chosen; replay works without a provider read |
-| Changed-fields-only event | Reject; partial merging makes ordering and replay harder |
-| Direct outbox-to-HTTP | Simpler for one consumer; Kafka provides retained replay and burst buffering |
-| Kafka event-driven synchronization | Chosen with a transactional outbox for durable delivery, replay, burst buffering and separation between services |
-| Serverless alternative | Viable with a different technology stack; described at the end of this document |
-| Changed-device list API | Useful future option: ask the provider which device IDs changed, then fetch only those devices; unavailable in the supplied contract |
-
 ### Back-of-the-envelope estimate
 
 These are planning assumptions from the design discussion, not assignment facts or measured benchmarks:
@@ -111,6 +94,22 @@ The expected load does not justify extra consumer partitions or database shards 
 - measured database throughput or storage limit: consider company-based sharding.
 
 For a multi-customer product, add `company_id` to identities and queries so two companies can safely have the same email, serial or provider ID and cannot access each other's data. This is a data-isolation requirement before it is a sharding strategy.
+
+### Solutions considered
+
+| Solution | Use / drawback |
+|---|---|
+| Full synchronization | Keep for initial import and recovery; wasteful for every change |
+| Scheduled polling | Simple fallback, but repeatedly transfers unchanged data |
+| `reportDate` cursor | Reject without a guarantee that all changes and removals update it |
+| Increasing device ID | Reject; misses edits, unassignments and removals |
+| Purchase-date filter | Reject for change detection; later changes do not alter purchase date |
+| ID-only event plus provider GET | Valid and smaller, but adds a request and provider dependency |
+| Complete-state event | Supports replay without a provider read, but uses more event storage |
+| Changed-fields-only event | Smaller, but partial merging makes ordering and replay harder |
+| Direct outbox-to-HTTP | Simpler for one consumer, but lacks Kafka's retained replay and burst buffering |
+| Serverless alternative | Viable with a different technology stack; described at the end of this document |
+| Changed-device list API | Useful future option: ask the provider which device IDs changed, then fetch only those devices; unavailable in the supplied contract |
 
 ### Recommended Kafka event-driven solution
 
