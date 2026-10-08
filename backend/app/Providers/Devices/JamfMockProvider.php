@@ -21,6 +21,12 @@ final class JamfMockProvider implements DeviceProvider
         } catch (\JsonException $e) {
             throw new RuntimeException('Invalid Jamf JSON.', 0, $e);
         }
+
+        return $this->parseResponse($response);
+    }
+
+    public function parseResponse(array $response): DeviceSnapshot
+    {
         if (! is_array($response) || ! isset($response['results']) || ! is_array($response['results']) || ! array_is_list($response['results']) || ! isset($response['totalCount']) || ! is_int($response['totalCount']) || $response['totalCount'] !== count($response['results'])) {
             throw new RuntimeException('Expected a complete snapshot with matching totalCount and results.');
         }
