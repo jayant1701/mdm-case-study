@@ -37,6 +37,11 @@ final class InventoryController extends Controller
         return $sync->full();
     }
 
+    public function syncProvider(JamfSyncService $sync)
+    {
+        return $sync->reconcileProvider();
+    }
+
     public function restore(JamfSyncService $sync)
     {
         return $sync->restore();

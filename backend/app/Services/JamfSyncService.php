@@ -7,12 +7,13 @@ use App\Contracts\Persistence\EmployeeRepository;
 use App\Contracts\Persistence\RestoreTaskRepository;
 use App\Contracts\Persistence\SyncRunRepository;
 use App\Contracts\Persistence\TransactionBoundary;
+use App\Contracts\TargetedDeviceProvider;
 use App\Data\DeviceEvent;
 use App\Models\SyncRun;
 
 final class JamfSyncService
 {
-    public function __construct(private DeviceProvider $provider, private DeviceReconciler $reconciler, private EmployeeRepository $employees, private RestoreTaskRepository $restorations, private SyncRunRepository $runs, private TransactionBoundary $transactions, private DeviceEventSimulator $simulator) {}
+    public function __construct(private DeviceProvider $provider, private DeviceReconciler $reconciler, private EmployeeRepository $employees, private RestoreTaskRepository $restorations, private SyncRunRepository $runs, private TransactionBoundary $transactions, private DeviceEventSimulator $simulator, private TargetedDeviceProvider $targeted) {}
 
     public function full(): SyncRun
     {
@@ -21,7 +22,7 @@ final class JamfSyncService
             $counts['warnings'] = $snapshot->warnings;
             $this->reconciler->validateIdentities($snapshot->devices);
             $simulation = $this->simulator->capture($snapshot, true);
-            foreach ($snapshot->devices as $device) {
+            foreach ($simulation['snapshot']->devices as $device) {
                 $this->reconciler->apply($device, $counts, $simulation['generation']);
             }
             $this->reconciler->removeAbsent($snapshot->devices, $counts);
@@ -41,31 +42,46 @@ final class JamfSyncService
         });
     }
 
+    public function reconcileProvider(): SyncRun
+    {
+        return $this->run('provider', function (array &$counts) {
+            $snapshot = $this->targeted->snapshot();
+            $this->reconciler->validateIdentities($snapshot->devices);
+            $fence = $this->simulator->capture($snapshot, true);
+            foreach ($fence['snapshot']->devices as $device) {
+                $this->reconciler->apply($device, $counts, $fence['generation']);
+            }
+            $this->reconciler->removeAbsent($fence['snapshot']->devices, $counts);
+        });
+    }
+
     public function restore(): SyncRun
     {
         return $this->run('restore', function (array &$counts) {
-            // The mock has no targeted HTTP endpoint; read its current complete state once.
-            $snapshot = $this->provider->snapshot();
-            $this->reconciler->validateIdentities($snapshot->devices);
             foreach ($this->restorations->pendingFor('jamf') as $task) {
                 $this->restorations->recordAttempt($task->id);
-                $device = null;
-                foreach ($snapshot->devices as $candidate) {
-                    if (($task->provider_device_id && $candidate->providerId === $task->provider_device_id) || (! $task->provider_device_id && $candidate->serial === $task->serial_code)) {
-                        $device = $candidate;
-                        break;
-                    }
+                if (! $task->provider_device_id) {
+                    throw new \RuntimeException('Restoration requires a retained provider device ID.');
                 }
-                if (! $device) {
+                $event = $this->targeted->current($task->provider_device_id);
+                if (! $event) {
                     $this->restorations->resolve($task->id, 'upstream_missing');
-                } elseif (! $device->email) {
-                    $this->restorations->resolve($task->id, 'upstream_unassigned');
-                } elseif (! $device->serial) {
-                    throw new \RuntimeException('Cannot restore a source device without a serial.');
-                } else {
-                    $this->reconciler->apply($device, $counts);
-                    $this->restorations->resolve($task->id, 'restored');
+
+                    continue;
                 }
+                if ($event->device->serial !== $task->serial_code) {
+                    throw new \RuntimeException('Restoration serial does not match the retained device identity.');
+                }
+                if (! $event->device->email) {
+                    $this->simulator->publish($event->device, 'unassigned', true);
+                    $this->restorations->resolve($task->id, 'upstream_unassigned');
+
+                    continue;
+                }
+                $this->reconciler->validateIdentities([$event->device]);
+                $fence = $this->simulator->publish($event->device, 'assigned', true);
+                $this->reconciler->apply($event->device, $counts, $fence['generation']);
+                $this->restorations->resolve($task->id, 'restored');
             }
         });
     }

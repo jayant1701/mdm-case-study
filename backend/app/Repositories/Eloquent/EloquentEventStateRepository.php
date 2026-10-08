@@ -17,6 +17,11 @@ final class EloquentEventStateRepository implements EventStateRepository
         return SimulatedProviderDevice::where('provider', $provider)->get()->keyBy('provider_device_id');
     }
 
+    public function producerState(string $provider, string $id): ?SimulatedProviderDevice
+    {
+        return SimulatedProviderDevice::where('provider', $provider)->where('provider_device_id', $id)->first();
+    }
+
     public function storeProducer(string $provider, string $id, array $state): void
     {
         SimulatedProviderDevice::updateOrCreate(['provider' => $provider, 'provider_device_id' => $id], $state);

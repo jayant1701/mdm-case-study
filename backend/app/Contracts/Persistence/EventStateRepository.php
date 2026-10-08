@@ -4,11 +4,14 @@ namespace App\Contracts\Persistence;
 
 use App\Models\DeviceEventState;
 use App\Models\SharedEventState;
+use App\Models\SimulatedProviderDevice;
 use Illuminate\Support\Collection;
 
 interface EventStateRepository
 {
     public function producerStates(string $provider): Collection;
+
+    public function producerState(string $provider, string $id): ?SimulatedProviderDevice;
 
     public function storeProducer(string $provider, string $id, array $state): void;
 

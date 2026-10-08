@@ -4,15 +4,17 @@ namespace App\Services;
 
 use App\Contracts\DeviceProvider;
 use App\Contracts\Persistence\EventStateRepository;
+use App\Contracts\Persistence\MockProviderRepository;
 use App\Contracts\Persistence\TransactionBoundary;
 use App\Data\DeviceEvent;
+use App\Data\DeviceRecord;
 use App\Data\DeviceSnapshot;
 use Illuminate\Support\Str;
 use RuntimeException;
 
 final class DeviceEventSimulator
 {
-    public function __construct(private DeviceProvider $provider, private EventStateRepository $states, private EventReceiver $receiver, private TransactionBoundary $transactions) {}
+    public function __construct(private DeviceProvider $provider, private EventStateRepository $states, private EventReceiver $receiver, private TransactionBoundary $transactions, private DeviceStateNormalizer $normalizer, private MockProviderRepository $providerStore) {}
 
     public function simulate(): array
     {
@@ -30,6 +32,7 @@ final class DeviceEventSimulator
         $previous = $this->states->producerStates('jamf');
         $current = [];
         $protected = [];
+        $skipped = [];
         foreach ($snapshot->devices as $record) {
             if (! $record->providerId || ! $record->serial) {
                 if (! $fence) {
@@ -44,8 +47,18 @@ final class DeviceEventSimulator
                     }
                 }
 
-continue;
+                $skipped[] = $record;
+
+                continue;
             }
+            $completed = $this->normalizer->complete($record, $previous->get($record->providerId)?->device);
+            $current[$record->providerId] = DeviceEvent::fromRecord($completed);
+        }
+        $normalized = [];
+        foreach ($current as $id => $device) {
+            $normalized[] = DeviceEvent::parse(['event_id' => 'normalize', 'provider_device_id' => (string) $id, 'version' => 1, 'producer_generation' => 1, 'type' => $device['email'] === null ? 'device.unassigned' : 'device.changed', 'device' => $device])->device;
+        }$snapshot = $this->normalizer->canonicalSnapshot($normalized, $snapshot->warnings);
+        foreach ($snapshot->devices as $record) {
             $current[$record->providerId] = DeviceEvent::fromRecord($record);
         }
         $plans = [];
@@ -64,8 +77,30 @@ continue;
             }
         }
         if (! $plans) {
-            return ['events' => [], 'generation' => null];
+            return ['events' => [], 'generation' => null, 'snapshot' => new DeviceSnapshot(array_merge($snapshot->devices, $skipped), $snapshot->warnings)];
         }
+        $result = $this->commitPlans($plans, $fence);
+        $result['snapshot'] = new DeviceSnapshot(array_merge($snapshot->devices, $skipped), $snapshot->warnings);
+
+        return $result;
+    }
+
+    public function publish(DeviceRecord $record, string $state, bool $fence = false): array
+    {
+        $previous = $this->states->producerState('jamf', $record->providerId);
+        $record = $this->normalizer->complete($record, $previous?->device);
+        $device = DeviceEvent::fromRecord($record);
+        $hash = DeviceEvent::semanticHash($device, $state);
+        $changed = ! $previous || $previous->state !== $state || $previous->fingerprint !== $hash;
+        if (! $changed && ! $fence) {
+            return ['events' => [], 'generation' => $previous?->producer_generation];
+        }
+
+        return $this->commitPlans([['id' => $record->providerId, 'device' => $device, 'state' => $state, 'hash' => $hash, 'old' => $previous, 'changed' => $changed]], $fence);
+    }
+
+    private function commitPlans(array $plans, bool $fence): array
+    {
         $generation = $this->states->nextGeneration('jamf');
         $events = [];
         foreach ($plans as $plan) {
@@ -89,6 +124,7 @@ continue;
                 $event = DeviceEvent::parse($payload);
             }
             $data = ['version' => $version, 'producer_generation' => $generation, 'state' => $plan['state'], 'serial_code' => $plan['device']['serial_code'], 'fingerprint' => $plan['hash'], 'device' => $plan['device']];
+            $this->providerStore->store($id, $plan['device'], $plan['state']);
             $this->states->storeProducer('jamf', $id, $data);
             if ($fence) {
                 $data['fingerprint'] = $event->revisionHash();
