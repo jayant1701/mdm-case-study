@@ -111,6 +111,18 @@ The services still use some Eloquent models and Laravel collections. The reposit
 
 A database row lock serializes provider operations in this demonstration. Large deployments would need tenant/device partitioning and load testing. The capacity calculations do not prove that this implementation supports 100 million devices.
 
+### Partitioning by company
+
+For a larger deployment, use company_id to separate each customer's inventory, events, provider connections and sync state. Employee emails and provider device IDs must be scoped to the company; duplicate checks must not mix customers.
+
+Start with company-scoped processing and locks so one company's sync does not block every customer. If database capacity becomes a limit, route each company to a database shard. Several companies can share a shard; a separate database per company is not required.
+
+Assign worker capacity by company or company group. If Kafka is introduced, use company and device identity as the event key to preserve per-device ordering within a partition. Kafka partitions and database shards are separate choices.
+
+Company-based routing spreads work, but a large company can still overload one shard. That company may need device-based processing partitions and coordinated updates to shared employee/model data. Measure peak traffic, database load and processing delay before choosing shard counts or adding Kafka.
+
+This is a scaling consideration. Company scoping, database sharding and Kafka are not implemented in this case study.
+
 ## Event persistence and failure handling
 
 The main risk is updating a device and losing its notification before the inventory receives it.
