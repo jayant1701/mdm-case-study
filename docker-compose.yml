@@ -1,4 +1,4 @@
-name: mdm-event-demo
+name: mdm-kafka-demo
 services:
   mysql:
     image: mysql:8.4
@@ -7,18 +7,91 @@ services:
       MYSQL_USER: mdm
       MYSQL_PASSWORD: local-password
       MYSQL_ROOT_PASSWORD: local-root-password
-    volumes:
-      - mysql_data:/var/lib/mysql
+    volumes: ["inventory_data:/var/lib/mysql"]
     healthcheck:
-      test: [CMD, mysqladmin, ping, -h, localhost, -plocal-root-password]
+      test: [CMD, mysql, -h, 127.0.0.1, -umdm, -plocal-password, -e, "SELECT 1", mdm]
       interval: 5s
       timeout: 5s
       retries: 30
-  backend:
+  provider-mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: provider
+      MYSQL_USER: provider
+      MYSQL_PASSWORD: provider-password
+      MYSQL_ROOT_PASSWORD: provider-root-password
+    volumes: ["provider_data:/var/lib/mysql"]
+    healthcheck:
+      test: [CMD, mysql, -h, 127.0.0.1, -uprovider, -pprovider-password, -e, "SELECT 1", provider]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  kafka:
+    image: apache/kafka:3.9.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes: ["kafka_data:/var/lib/kafka/data"]
+    healthcheck:
+      test: [CMD-SHELL, "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+  provider:
     build: ./backend
-    environment: &backend_env
+    environment: &provider_env
       APP_ENV: local
       APP_DEBUG: "false"
+      APP_ROLE: provider
+      APP_KEY: base64:5PSfzg00MxYaEq57/j+7q30hgToUVvNTTbMVvqMA97g=
+      DB_CONNECTION: mysql
+      DB_HOST: provider-mysql
+      DB_DATABASE: provider
+      DB_USERNAME: provider
+      DB_PASSWORD: provider-password
+      CACHE_STORE: array
+      SESSION_DRIVER: array
+      JAMF_MOCK_PATH: /data/api-mock-response.json
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC: jamf.devices.v1
+    command: [sh, -c, "php artisan migrate --path=database/provider-migrations --force && php artisan provider:initialize && php artisan serve --host=0.0.0.0 --port=8000 --no-reload"]
+    ports: ["127.0.0.1:8002:8000"]
+    volumes: ["./files:/data:ro"]
+    depends_on:
+      provider-mysql: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, php, -r, "exit(@file_get_contents('http://localhost:8000/up') === false ? 1 : 0);"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  publisher:
+    build: ./backend
+    environment: *provider_env
+    command: [sh, -c, "while true; do php artisan provider:publish; sleep 2; done"]
+    depends_on:
+      provider: {condition: service_healthy}
+      kafka: {condition: service_healthy}
+  backend:
+    build: ./backend
+    environment: &inventory_env
+      APP_ENV: local
+      APP_DEBUG: "false"
+      APP_ROLE: inventory
+      PROVIDER_MODE: remote
+      JAMF_PROVIDER_URL: http://provider:8000/api/provider
       APP_KEY: base64:5PSfzg00MxYaEq57/j+7q30hgToUVvNTTbMVvqMA97g=
       DB_CONNECTION: mysql
       DB_HOST: mysql
@@ -27,20 +100,31 @@ services:
       DB_PASSWORD: local-password
       CACHE_STORE: database
       QUEUE_CONNECTION: database
+      SESSION_DRIVER: array
       JAMF_MOCK_PATH: /data/api-mock-response.json
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC: jamf.devices.v1
+      KAFKA_GROUP: inventory-v1
     ports: ["127.0.0.1:8000:8000"]
     volumes: ["./files:/data:ro"]
     depends_on:
       mysql: {condition: service_healthy}
+      provider: {condition: service_healthy}
     healthcheck:
       test: [CMD, php, -r, "exit(@file_get_contents('http://localhost:8000/up') === false ? 1 : 0);"]
       interval: 5s
       timeout: 5s
       retries: 30
+  consumer:
+    build: ./backend
+    environment: *inventory_env
+    command: [sh, -c, "while true; do php artisan events:consume; sleep 3; done"]
+    depends_on:
+      backend: {condition: service_healthy}
+      kafka: {condition: service_healthy}
   worker:
     build: ./backend
-    environment: *backend_env
-    volumes: ["./files:/data:ro"]
+    environment: *inventory_env
     command: [sh, -c, "while true; do php artisan events:recover; php artisan queue:work --stop-when-empty --tries=3 --timeout=60 --sleep=1; sleep 3; done"]
     depends_on:
       backend: {condition: service_healthy}
@@ -52,5 +136,6 @@ services:
     depends_on:
       backend: {condition: service_healthy}
 volumes:
-  mysql_data:
-
+  inventory_data:
+  provider_data:
+  kafka_data:
