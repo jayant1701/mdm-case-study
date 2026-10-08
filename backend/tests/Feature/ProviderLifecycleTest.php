@@ -39,7 +39,8 @@ final class ProviderLifecycleTest extends InventoryTestCase
         Queue::fake();
         $this->sync();
         $device = $this->getJson('/api/provider/jamf/devices/101')->assertOk()->json('device');
-        $this->patchJson('/api/provider/jamf/devices/101', ['asset' => ['report_date' => '2026-10-09 00:00:00']])->assertOk()->assertJsonPath('emitted', 0);
+        $this->patchJson('/api/provider/jamf/devices/101', ['asset' => ['last_contact_at' => '2026-10-09 00:00:00']])->assertOk()->assertJsonPath('emitted', 0);
+        $this->patchJson('/api/provider/jamf/devices/101', ['asset' => ['report_date' => '2026-10-09 00:00:00']])->assertOk()->assertJsonPath('emitted', 1);
         $this->patchJson('/api/provider/jamf/devices/101', ['specifications' => ['ram_gb' => 64]])->assertOk()->assertJsonPath('emitted', 1);
         $this->drain();
         $this->assertSame(64.0, Asset::where('provider_device_id', '101')->first()->specifications->ram_gb);

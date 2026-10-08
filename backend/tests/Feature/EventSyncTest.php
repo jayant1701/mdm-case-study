@@ -71,7 +71,7 @@ class EventSyncTest extends InventoryTestCase
         $this->assertDatabaseCount('assets', 7);
     }
 
-    public function test_simulator_ignores_heartbeats_but_emits_hardware_changes_with_same_report_date(): void
+    public function test_simulator_ignores_last_contact_but_emits_report_date_and_hardware_changes(): void
     {
         Queue::fake();
         $first = app(DeviceEventSimulator::class)->simulate();
@@ -79,16 +79,20 @@ class EventSyncTest extends InventoryTestCase
         $this->assertSame(0, app(DeviceEventSimulator::class)->simulate()['emitted']);
         foreach ($this->source['results'] as &$row) {
             $row['general']['lastContactTime'] = '2026-10-08T12:00:00Z';
-            $row['general']['reportDate'] = '2026-10-08T12:00:00Z';
         }unset($row);
         $this->write();
         $this->assertSame(0, app(DeviceEventSimulator::class)->simulate()['emitted']);
+        $this->source['results'][0]['general']['reportDate'] = '2026-10-08T12:00:00Z';
+        $this->write();
+        $reportDateChange = app(DeviceEventSimulator::class)->simulate();
+        $this->assertSame(1, $reportDateChange['emitted']);
+        $this->assertSame(2, EventInbox::latest('id')->first()->version);
         $this->source['results'][0]['hardware']['totalRamMegabytes'] = 65536;
         $this->write();
         $next = app(DeviceEventSimulator::class)->simulate();
         $this->assertSame(1, $next['emitted']);
         $event = EventInbox::latest('id')->first();
-        $this->assertSame(2, $event->version);
+        $this->assertSame(3, $event->version);
         $this->assertSame('2026-10-08 12:00:00', $event->payload['device']['asset']['report_date']);
         $this->process($event);
         $this->assertSame(64.0, Asset::first()->specifications->ram_gb);

@@ -87,15 +87,21 @@ class IndependentProviderTest extends TestCase
         $this->assertDatabaseCount('producer_outbox', 7);
     }
 
-    public function test_heartbeat_metadata_persists_without_versions_or_notifications(): void
+    public function test_last_contact_is_silent_while_report_date_emits_a_notification(): void
     {
         $this->service()->import($this->source);
-        $this->source['results'][0]['general']['reportDate'] = '2026-10-08T12:00:00Z';
         $this->source['results'][0]['general']['lastContactTime'] = '2026-10-08T12:00:00Z';
         $result = $this->service()->import($this->source);
         $this->assertSame(0, $result['emitted']);
         $current = $this->service()->current('101');
         $this->assertSame(1, $current['version']);
+        $this->assertSame('2026-10-08 12:00:00', $current['device']['asset']['last_contact_at']);
+
+        $this->source['results'][0]['general']['reportDate'] = '2026-10-08T12:00:00Z';
+        $result = $this->service()->import($this->source);
+        $this->assertSame(1, $result['emitted']);
+        $current = $this->service()->current('101');
+        $this->assertSame(2, $current['version']);
         $this->assertSame('2026-10-08 12:00:00', $current['device']['asset']['report_date']);
     }
 

@@ -76,7 +76,7 @@ final readonly class DeviceEvent
         }
         $device['asset'] = array_replace(['last_contact_at' => null, 'site_provider_id' => null, 'site_name' => null], $device['asset'] ?? []);
         unset($device['specifications']['processor_type'], $device['specifications']['core_count']);
-        unset($device['asset']['report_date'], $device['asset']['last_contact_at']);
+        unset($device['asset']['last_contact_at']);
         // MySQL JSON may round-trip 16.0 as 16; compare normalized hardware numbers.
         foreach (['ram_gb', 'storage_gb', 'battery_capacity_percent'] as $field) {
             if (isset($device['specifications'][$field])) {
