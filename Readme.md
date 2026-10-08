@@ -123,7 +123,7 @@ The choices cover separate parts of the problem: detecting changes, deciding wha
 | Notification contents | ID-only notification plus provider GET | Smaller notification, but every change needs another provider request |
 | Notification contents | Complete-device notification | Carries the device, employee and hardware state, so it can be replayed without another provider request; the message is larger |
 | Notification contents | Changed-fields notification | Smaller, but partial merging makes ordering and replay harder |
-| Notification delivery | Direct outbox-to-HTTP | Simple for one consumer, but replay and buffering remain tied to the provider database rather than an independent retained stream |
+| Notification delivery | Direct outbox-to-HTTP | Simple with one provider host and one consumer. With multiple hosts for availability, publishers must coordinate row claims, retries and direct delivery with database locks. A shared retained event stream centralizes delivery and consumer coordination, although outbox publishers still lock rows when claiming work |
 | Deployment | Serverless alternative | Viable with a different technology stack; described at the end of this document |
 
 ### Recommended solution
@@ -706,9 +706,7 @@ This illustrative monthly event-path estimate uses 9,167 to 916,667 events, publ
 
 Database capacity/storage, backups, network/NAT use, user-facing reads, reconciliation, security, support and observability are excluded and may dominate. Current prices should be checked with the [AWS Lambda](https://aws.amazon.com/lambda/pricing/), [API Gateway](https://aws.amazon.com/api-gateway/pricing/), [SQS](https://aws.amazon.com/sqs/pricing/), [Aurora](https://aws.amazon.com/rds/aurora/pricing/) and [CloudWatch](https://aws.amazon.com/cloudwatch/pricing/) calculators.
 
-Logging cost should be controlled at the source: structured error/state-transition logs, metrics for counts, no log per unchanged asset, sampled diagnostics, short searchable retention and object-storage archival. Grafana Cloud or Datadog can receive OpenTelemetry data, but neither is automatically cheaper; ingestion, indexing and retention determine cost.
-
-A previous Prime Video subscription and buy/rent workload serving millions of customers in North America cost the team about 7–8k per month. Its currency, traffic profile and service breakdown were not supplied, so it is context rather than this system's forecast. It shows that customer traffic and observability can cost much more than the small event path above.
+From prior team experience, a serverless workload supporting Prime Video monthly subscription and buy/rent operations for millions of users in North America cost about 7–8k per month. That user scale is much larger than this case study's estimate of 9,167 to 916,667 monthly device changes, and the serverless design scaled without an application-server fleet. The main avoidable cost was high-volume CloudWatch logging. This can be reduced with metrics, sampled structured logs, shorter searchable retention and object-storage archival, or by comparing OpenTelemetry services such as Grafana Cloud and Datadog.
 
 ## 12. Verification
 
