@@ -1,31 +1,194 @@
-# MDM inventory case study
+# MDM device sync case study
 
-## Purpose
+## Contents
 
-This application imports devices that are assigned to employees, stores a local inventory in MySQL, and shows assets and employees in a React UI.
+1. [Case study](#1-case-study)
+2. [Codebase onboarding](#2-codebase-onboarding)
+3. [Run the application](#3-run-the-application)
+4. [Application behavior and mock data](#4-application-behavior-and-mock-data)
+5. [Implemented design](#5-implemented-design)
+6. [Data model](#6-data-model)
+7. [Deletion and reconciliation](#7-deletion-and-reconciliation)
+8. [Failure handling and Activity](#8-failure-handling-and-activity)
+9. [API endpoints](#9-api-endpoints)
+10. [Alternatives and capacity](#10-alternatives-and-capacity)
+11. [Serverless alternative and cost](#11-serverless-alternative-and-cost)
+12. [Verification](#12-verification)
+13. [Remaining scope](#13-remaining-scope)
 
-Jamf is the only provider in scope. The repository does **not** connect to a real Jamf tenant. The supplied `files/api-mock-response.json` file is treated as a sample Jamf API response.
+## 1. Case study
 
-The solution keeps the assignment's direct JSON sync and also demonstrates the recommended design discussed during the case study: a separate mock provider emits durable device events through Kafka, and the inventory service processes those events without reading the whole fleet for every change.
+### Context
 
-## Assignment requirements and decisions
+WorkWize is an IT hardware management platform. Customers need to import assigned devices from an MDM provider. Jamf is the only provider in scope for this assignment, but the design should make additional providers possible.
+
+The supplied task asks for a Laravel, React and MySQL application that:
+
+- reads `files/api-mock-response.json` as a mock Jamf response;
+- imports only devices assigned to an employee;
+- identifies an asset by serial code and an employee by email;
+- shows assets and employees in a React UI;
+- deletes assets and employees only from the local database;
+- recreates locally deleted data on a later sync when it still exists upstream;
+- reflects assignment and attribute changes, such as a RAM update;
+- runs locally with Docker Compose.
+
+The original reference implementation is in `files/RefJamfSyncService.php`, and the supplied UI wireframe is in `files/ui_design_wireframe.png`. The assignment describes a six-hour case study and does not require production infrastructure.
+
+The original submission note asks that GitHub reviewers `@gumacs92` and `@omarsh99` receive repository access.
+
+### Definitions
+
+- **Asset:** a physical device assigned to an employee. Unassigned provider devices are not kept in local inventory.
+- **Asset attributes:** device state that may vary per physical asset, such as RAM, storage and battery capacity.
+- **Employee:** the current user assigned to an asset, uniquely identified locally by email.
+- **Device model:** model and fixed configuration shared by assets with the same manufacturer and model identifier.
+
+### Requirements and implementation decisions
 
 | Requirement | Implementation |
 |---|---|
-| Import assigned devices | Rows without an employee email are not kept as local assets |
+| Import assigned devices | Rows without an employee email are removed or ignored |
 | Asset identity | `serial_code` is unique locally |
 | Employee identity | Email is unique locally |
-| Reflect changed assignments and attributes | Full sync and device events both upsert the current values |
-| Recreate locally deleted data on sync | Full reconciliation recreates assigned upstream devices and reactivates employees |
-| Delete only local data from the UI | UI deletes never call the provider delete endpoint |
-| Laravel + React + MySQL | Implemented and started by Docker Compose |
-| Future providers | Provider and persistence contracts have concrete Jamf/mock adapters and Eloquent repositories |
+| Reflect assignment and attribute changes | Full reconciliation and device events upsert current values |
+| Recreate locally deleted data | Full reconciliation recreates assigned upstream devices and employees |
+| Delete only local data from the UI | UI deletion never calls the provider delete endpoint |
+| Laravel, React and MySQL | Provided through Docker Compose |
+| Future providers | Provider contracts have concrete Jamf/mock adapters |
 
-The assignment allows one employee to own several assets. The sample contains this case. Each asset has at most one current employee, so the current schema uses `assets.employee_id` instead of a separate employee-assets join table. A join table would be needed if assignment history or simultaneous many-to-many ownership became a requirement.
+One employee can own several assets. Each asset has at most one current employee, so `assets.employee_id` is sufficient. A join table would be needed for assignment history or simultaneous many-to-many ownership.
 
-## Run the application
+### Delivered scope
 
-With Docker Desktop running:
+The assignment-compatible path reads the supplied JSON through Laravel. The solution also demonstrates the recommended event-driven design discussed during the case study: a separate mock provider writes durable device events to an outbox, Kafka transports them, and the inventory service processes them without reading the full fleet for every change.
+
+The repository does not connect to a real Jamf tenant. A real integration must verify Jamf response shapes, authentication, pagination, filters and rate limits.
+
+## 2. Codebase onboarding
+
+### Start here
+
+Read these areas in order:
+
+1. This README for scope, behavior and design.
+2. `docker-compose.yml` for process and database boundaries.
+3. `backend/routes/api.php` and `backend/routes/provider-api.php` for HTTP entry points.
+4. `backend/app/Providers/AppServiceProvider.php` for interface bindings.
+5. `backend/app/Services/JamfSyncService.php` for inventory synchronization.
+6. `backend/app/Services/IndependentProviderService.php` for provider mutations and outbox writes.
+7. `frontend/src.jsx` and `frontend/views.jsx` for UI state and views.
+
+### Repository structure
+
+```text
+.
+├── backend/
+│   ├── app/
+│   │   ├── Contracts/             Provider, messaging and persistence interfaces
+│   │   ├── Data/                  Device, snapshot and event data objects
+│   │   ├── Http/Controllers/      Inventory, provider, event and demo HTTP handlers
+│   │   ├── Jobs/                  Queued event processing
+│   │   ├── Messaging/             Kafka publisher
+│   │   ├── Models/                Eloquent models
+│   │   ├── Providers/Devices/     JSON, local and HTTP provider adapters
+│   │   ├── Repositories/Eloquent/ Database implementations of repository contracts
+│   │   └── Services/              Sync, reconciliation, deletion and event workflows
+│   ├── database/
+│   │   ├── migrations/            Inventory database schema
+│   │   └── provider-migrations/   Provider database schema
+│   ├── routes/                    HTTP and console entry points
+│   └── tests/Feature/             Backend behavior and boundary tests
+├── frontend/
+│   ├── src.jsx                    Application state, API calls and navigation
+│   ├── views.jsx                  Assets, Employees, Activity and Testing views
+│   ├── pendingNotificationsCsv.js CSV creation and download
+│   └── style.css                  Shared UI styling
+├── files/
+│   ├── api-mock-response.json     Supplied Jamf-format fixture
+│   ├── RefJamfSyncService.php     Supplied reference service
+│   └── ui_design_wireframe.png    Supplied UI wireframe
+├── docker-compose.yml             Complete local deployment
+└── README.md                      Case study, onboarding and design documentation
+```
+
+### Generated and installed files
+
+These areas are framework or tool output and are not the case-study implementation:
+
+- `backend/vendor/` contains Composer dependencies;
+- `frontend/node_modules/` contains npm dependencies;
+- `frontend/dist/` contains the generated frontend build;
+- `backend/storage/` contains Laravel runtime files;
+- `composer.lock` and `package-lock.json` are dependency lock files;
+- much of `backend/config/`, `bootstrap/`, `public/` and `artisan` comes from the Laravel project skeleton.
+
+The application-specific logic is concentrated in `backend/app`, the migrations, routes, feature tests, the four authored frontend source files, Docker Compose and this README.
+
+### Runtime services
+
+The same Laravel source runs as two independent application roles. `APP_ROLE` selects the role; this is a deployment role, not a user permission.
+
+| Compose service | Responsibility |
+|---|---|
+| `provider-mysql` | Provider devices, versions, tombstones and producer outbox |
+| `provider` | Laravel mock-provider HTTP API on port 8002 |
+| `publisher` | Reads due outbox rows and publishes them to Kafka |
+| `kafka` | Event transport and retained replay |
+| `mysql` | Inventory, sync history, inbox and Laravel jobs |
+| `backend` | Laravel inventory HTTP API on port 8000 |
+| `consumer` | Reads Kafka, validates messages and stores the durable inbox |
+| `worker` | Processes saved inbox events through Laravel jobs |
+| `frontend` | React/Vite UI on port 5173 |
+
+The provider and inventory roles use separate MySQL servers, credentials, migrations and volumes. `PROVIDER_MODE=remote` binds the inventory service to the provider HTTP adapter in Docker.
+
+### Main interfaces and implementations
+
+The adapter pattern uses contracts; it does not require a shared abstract base class.
+
+| Interface | Purpose | Current implementation |
+|---|---|---|
+| `DeviceProvider` | Read and parse a complete provider response | `JamfMockProvider` |
+| `TargetedDeviceProvider` | Read one device or a complete snapshot | `HttpMockProviderAdapter`; local compatibility uses `MockProviderAdapter` |
+| `RemoteProviderGateway` | Snapshot/import, outbox controls and provider CRUD | `HttpMockProviderAdapter` |
+| `EventPublisher` | Publish one complete event | `KafkaEventPublisher` |
+| Persistence contracts | Assets, employees, models, syncs, inbox, checkpoints and outbox | Classes under `Repositories/Eloquent` |
+| `TransactionBoundary` | Execute application work in an inventory transaction | `DatabaseTransactionBoundary` |
+
+Bindings live in `AppServiceProvider`. Some repository contracts still return Eloquent types, so the application is not completely independent of Laravel.
+
+### Important services
+
+| Service | Responsibility |
+|---|---|
+| `IndependentProviderService` | Provider CRUD, imports, versions, generation and transactional outbox |
+| `ProducerOutboxPublisher` | Publish pending events and record acknowledgement or retry state |
+| `KafkaNotificationReceiver` | Validate Kafka records and durably accept or quarantine them |
+| `EventReceiver` | Deduplicate incoming events, store inbox rows and dispatch jobs |
+| `EventProcessor` | Apply stored events while enforcing ordering |
+| `JamfSyncService` | Record and execute full, provider, event and restoration syncs |
+| `RemoteProviderSyncService` | Reconcile versioned snapshots and targeted lookups |
+| `DeviceReconciler` | Apply normalized state to employees, models, assets and attributes |
+| `AssetDeletionService` | Enforce local-only asset and employee deletion |
+| `DemoControlService` | Reset, failure simulation and Provider Lab operations |
+
+### Where to make common changes
+
+| Change | Start here |
+|---|---|
+| Map another Jamf field | `JamfMockProvider`, data objects, migrations and `DeviceReconciler` |
+| Add another provider | Provider contracts, new adapter, provider registry and credentials |
+| Change asset or employee persistence | Persistence contract, Eloquent repository and migration |
+| Change event fields | `DeviceEvent`, provider normalization and event tests |
+| Change synchronization rules | `JamfSyncService`, `RemoteProviderSyncService`, `DeviceReconciler` |
+| Change delivery retries | `ProducerOutboxPublisher`, Kafka commands and outbox repository |
+| Change UI behavior | `frontend/src.jsx`, `frontend/views.jsx`, `frontend/style.css` |
+| Add a local demonstration | `DemoControlService`, `DemoController`, local routes and Testing UI |
+
+## 3. Run the application
+
+Docker Desktop is the only host runtime required.
 
 ```sh
 docker compose up --build
@@ -35,153 +198,370 @@ docker compose up --build
 - Inventory API: http://localhost:8000/api/assets
 - Mock provider API: http://localhost:8002/api/provider/snapshot
 
-On fresh Docker volumes, the provider initializes its store from the supplied JSON. That produces seven device events; the publisher, Kafka consumer and queue worker then populate seven assigned assets and six employees. Existing Docker volumes keep their previous state.
+On fresh volumes, the provider initializes from the supplied JSON. Seven device events flow through Kafka and populate seven assigned assets and six employees. Existing volumes retain their state.
 
-The UI has four areas:
+Stop the application with:
 
-- **Assets** lists devices. Details open directly below the selected row.
-- **Employees** lists active employees and their assigned assets. Selecting an employee opens their contact, status and complete assigned-device details directly below the row.
-- **Activity** shows provider notifications waiting for Kafka and permanently failed inventory changes. Delivery failures can be processed manually or exported as CSV. Inventory failures identify the affected device and employee and can be retried; complete payloads and exceptions remain in the database for debugging.
-- **Testing** can reset the demo, create one deterministic delivery-failure state, change provider devices through Provider Lab, list locally deleted devices and show technical sync/event history. Provider Lab changes the provider only; use Sync Now to fetch those changes into the visible inventory.
+```sh
+docker compose down
+```
 
-`docker compose down` stops the application. `docker compose down -v` also deletes both MySQL volumes and the Kafka volume.
+Delete both MySQL volumes and the Kafka volume with:
 
-## What the mock JSON is for
+```sh
+docker compose down -v
+```
 
-`files/api-mock-response.json` is test input representing a complete response from a third-party Jamf API. It is not an event log and it does not contain created, updated or skipped counters. Those counters are calculated by the inventory sync after comparing the response with local state.
+## 4. Application behavior and mock data
 
-There are two explicit sync paths:
+### User interface
 
-1. `POST /api/sync` is the assignment-compatible path. The Laravel inventory backend reads the JSON file directly, sends that complete response through the provider import API, and reconciles the returned versioned snapshot.
-2. The UI's **Sync Now** action calls `POST /api/sync/provider`. It does not read the file. It fetches the mock provider's current snapshot over HTTP and reconciles the inventory.
+- **Assets** lists devices and opens details directly below the selected row.
+- **Employees** lists active employees and opens their contact data and assigned devices below the row.
+- **Activity** shows provider notifications waiting for Kafka and inventory events that exhausted automatic retries. Pending delivery rows can be exported as CSV or processed manually.
+- **Testing** resets the demo, creates a deterministic Kafka-delivery failure, changes provider devices through Provider Lab, lists locally deleted assets and shows technical history.
 
-Normal provider POST, PATCH and DELETE operations update the provider database and create events. Event workers use the saved event payload; they do not read the JSON file and do not fetch the whole provider snapshot.
+Provider Lab changes only provider state. **Sync Now** fetches the current provider snapshot and reconciles the visible inventory.
 
-**Reset demo** asks the mock provider to reload the active fixture state and clears the inventory database. It deliberately leaves the inventory empty until **Sync Now** is selected. Provider generations and device versions remain monotonic so a delayed pre-reset event cannot overwrite the newer snapshot.
+### Purpose of the JSON fixture
+
+`files/api-mock-response.json` represents one complete Jamf API response. It is not an event log and does not contain created, updated or skipped counters. The inventory service calculates those counters by comparing provider state with local state.
+
+There are two sync paths:
+
+1. `POST /api/sync` is assignment-compatible. Laravel reads the JSON, sends it through the provider import boundary and reconciles the returned versioned snapshot.
+2. **Sync Now** calls `POST /api/sync/provider`. It reads the provider's current HTTP snapshot, not the file.
+
+Provider POST, PATCH and DELETE operations update the provider database and create outbox events. Event workers process saved event payloads without reading the JSON or fetching the entire provider snapshot.
+
+**Reset demo** reloads provider state from the fixture and clears inventory. Inventory remains empty until **Sync Now** is selected. Provider generation and device versions stay monotonic so delayed pre-reset events cannot overwrite the new snapshot.
 
 ### Source-field mapping
 
 | Mock response field | Local use |
 |---|---|
-| `id` | `provider_device_id`; identifies the upstream record for events and targeted lookups |
-| `hardware.serialNumber` | `assets.serial_code`; identifies the physical asset locally |
-| `userAndLocation.email` | Employee business identifier and assignment signal |
-| `userAndLocation.username`, `realname`, `position`, `phone` | Employee metadata |
+| `id` | `provider_device_id`; upstream identity for events and targeted lookups |
+| `hardware.serialNumber` | `assets.serial_code`; physical-asset identity |
+| `userAndLocation.email` | Employee identity and assignment signal |
+| `username`, `realname`, `position`, `phone` | Employee metadata |
 | `general.name`, `udid`, purchasing fields | Asset metadata |
-| `hardware.make`, `modelIdentifier`, `model`, `processorType`, `coreCount` and `general.platform` | Shared device-model and configuration data |
-| RAM, storage and battery | Per-asset attributes because these can vary between physical devices |
-| `general.reportDate` | Asset freshness watermark; an older report cannot overwrite newer asset state |
-| `general.lastContactTime` | Stored on the asset but excluded from event change detection |
-| `general.site.id`, `general.site.name` | Stored on the asset; `-1` / `None` is normalized to no site |
+| Manufacturer, model identifier, model, platform, processor and cores | Shared device-model/configuration data |
+| RAM, storage and battery | Per-asset attributes |
+| `general.reportDate` | Freshness watermark; an older report cannot overwrite newer asset state |
+| `general.lastContactTime` | Stored but excluded from semantic event detection |
+| `general.site.id`, `general.site.name` | Asset site; `-1` and `None` become `null` |
 
-The supplied response uses `site: {"id":"-1","name":"None"}`, so both local site fields are `null`. Site is separate from employee assignment; assignment is determined only from employee email.
+Site is separate from assignment. Employee email alone determines whether a device is assigned.
 
-This implementation treats the model identifier, manufacturer, model name, platform, processor and core count as shared model/configuration data. A conflicting non-null value for the same manufacturer and model identifier rejects the sync instead of silently changing every asset that references the model. Missing or null model metadata does not erase an existing known value.
+Manufacturer, model identifier, model name, platform, processor and core count are treated as fixed shared configuration. Conflicting non-null values for the same manufacturer and model identifier reject the change. Missing values do not erase known values. If a real provider permits processor or core upgrades without changing the model identifier, those fields should move to the asset level or a separate configuration entity.
 
-JSON order, increasing provider IDs, purchase date and report date are not trusted as change cursors. The supplied contract does not guarantee those properties, and none of them reliably represents removals.
+JSON order, increasing provider IDs, purchase date and report date are not change cursors. None reliably represents edits and removals under the supplied contract.
 
-## Recommended design
+## 5. Implemented design
 
-The mock provider is enhanced to model an event-driven integration:
+### Event path
 
 ```text
 Provider POST / PATCH / DELETE
-  -> save provider state and an outbox event in one MySQL transaction
-  -> publisher sends the saved event to Kafka and waits for acknowledgement
-  -> consumer validates and saves the event in the inventory inbox
-  -> consumer commits its Kafka offset after durable inbox acceptance
-  -> Laravel queue job applies the stored event
+  -> provider_devices + producer_outbox in one MySQL transaction
+  -> publisher sends the saved event to Kafka
+  -> consumer validates and saves it in event_inboxes
+  -> consumer commits the Kafka offset after durable acceptance
+  -> ProcessDeviceEvent job applies the stored event
   -> React reads the resulting inventory through HTTP APIs
 ```
 
-Each event contains an event ID, provider device ID, per-device version, provider generation, lifecycle type and the complete relevant device state. Complete state avoids an extra provider GET for every event. The trade-off is a larger message.
+Each event carries an event ID, provider device ID, device version, provider generation, lifecycle type and complete relevant device state. Complete state avoids a provider GET for every event, at the cost of a larger message.
 
-### Why shared event state exists
+### Delivery and processing
 
-One employee or device model can appear in events for several devices. Kafka preserves order for one device key, but it does not guarantee that events for two different devices arrive in their original order.
+Provider mutations lock the provider generation row, validate identities, update provider state, increment versions/generation and insert outbox records inside one transaction. If any write fails, all changes roll back.
 
-For example, Alex owns a MacBook and an iPhone. A MacBook event at provider generation 20 says Alex is a Senior Engineer. A delayed iPhone event from generation 15 still contains Alex's older title, Backend Engineer. The iPhone data may be valid for that device, so the whole event cannot be discarded. `shared_event_states` records that employee `alex.smith@company.test` was already updated at generation 20. The worker applies the iPhone fields but ignores its older employee fields.
+Kafka publication is asynchronous. The publisher selects pending rows, publishes complete events keyed by `jamf|provider_device_id`, waits for broker acknowledgement and then marks the row published. A failed publication leaves the row pending with its error and retry time.
 
-The same rule protects device-model data shared by several assets. Each checkpoint is unique by `provider + kind + identity`: `kind` is `employee` or `model`, `identity` is an employee email or manufacturer/model identifier, `generation` is the newest accepted provider generation, and `fingerprint` is a hash of the shared fields. An older generation is ignored. The same generation with a different fingerprint is rejected as conflicting data. The actual records remain in `employees` and `device_models`; `shared_event_states` stores only ordering checkpoints, not another copy or a change history.
+The consumer disables automatic offset commits. It validates each Kafka record and stores it through `EventReceiver`. It commits the offset only after the inbox accepts the event. Invalid JSON, invalid schemas and conflicting messages are saved in `rejected_notifications` before their offsets are acknowledged. Database failures are not acknowledged and Kafka redelivers them.
 
-Full reconciliation remains necessary for initial import and recovery. It is manual in this case study; no reconciliation scheduler is implemented.
+`ProcessDeviceEvent` references the saved inbox ID. `EventProcessor` applies the payload, ordering checkpoint and completion status in one inventory transaction. The worker never reads the JSON fixture or provider API.
 
-### Why the outbox and Kafka are both used
+### Full reconciliation
 
-The provider cannot atomically commit one transaction across MySQL and Kafka. It therefore writes the provider change and its notification to the same MySQL transaction. A publisher sends committed outbox rows to Kafka afterward.
+```text
+React Sync Now
+  -> POST /api/sync/provider
+  -> HttpMockProviderAdapter
+  -> complete provider snapshot
+  -> RemoteProviderSyncService
+  -> DeviceReconciler
+  -> inventory tables and SyncRun counters
+```
 
-- The **outbox** prevents a committed provider change from losing its notification.
-- **Kafka** buffers bursts, separates producer and consumer availability, and retains acknowledged messages for replay during its retention period.
-- The **inventory inbox** makes consumer receipt durable before the Kafka offset is committed.
-- Event IDs and device versions make repeated delivery safe and stop older messages from overwriting newer data.
+Full reconciliation is required for initial import and recovery. It is manual in this case study. Absence counts as removal only in a validated complete snapshot. A real paginated adapter must read every page before applying that rule.
 
-A lock coordinates concurrent provider mutations, while the transaction makes the provider row and outbox row atomic. A lock is not a replacement for a transaction.
+A snapshot older than an already applied event is rejected. An equal version with different meaningful state is also rejected. Reconciliation records current versions so a delayed event cannot reverse the snapshot.
 
-The deterministic **Simulate Kafka failure** button does not shut down Kafka. It changes one provider device and creates the same durable pending-outbox state that a failed publish would leave: one attempt, an error, and a deferred retry time. This makes the recovery path reviewable without changing Docker infrastructure. The automated publisher ignores the deferred row until it is due; the Activity action can process it immediately.
+### Provider Lab
 
-## Solutions considered
+```text
+Testing form
+  -> local/testing demo endpoint
+  -> RemoteProviderGateway create/patch/delete
+  -> provider transaction and outbox event
+  -> UI reports the provider change
+
+Sync Now
+  -> provider snapshot
+  -> inventory reconciliation
+  -> refreshed Assets and Employees
+```
+
+Provider Lab does not run reconciliation directly. The background event pipeline remains active, while Sync Now gives the reviewer an explicit reconciliation workflow.
+
+### Device and shared ordering checkpoints
+
+`device_event_states` stores the newest accepted version for each provider device. If device `101` reached version 6, a delayed version 5 event is stale and cannot overwrite or recreate it.
+
+`shared_event_states` protects employee and model data that can arrive through different device keys. For example:
+
+```text
+Device 101, generation 20: Alex is a Senior Engineer
+Device 103, generation 15: Alex is a Backend Engineer
+```
+
+The second event may contain a valid update for device `103`, so the device portion is processed. Its employee fields are older than Alex's generation-20 checkpoint and are ignored.
+
+| Column | Meaning |
+|---|---|
+| `provider` | Provider namespace, currently `jamf` |
+| `kind` | `employee` or `model` |
+| `identity` | Employee email or `manufacturer|model_identifier` |
+| `generation` | Newest accepted provider generation |
+| `fingerprint` | Hash of shared fields at that generation |
+
+`provider + kind + identity` is unique. Older generations cannot update shared fields. The same generation with a different fingerprint is rejected. The table holds only the latest ordering checkpoint; actual records remain in `employees` and `device_models`.
+
+### Why outbox, Kafka and inbox are all present
+
+MySQL and Kafka cannot participate in one atomic transaction in this design.
+
+- The **provider outbox** commits provider state and the notification together.
+- **Kafka** buffers bursts, separates producer and consumer availability, and permits replay during retention.
+- The **inventory inbox** makes receipt durable before the Kafka offset is committed.
+- Event IDs and versions make repeated delivery safe.
+
+A database transaction and a lock solve different problems. The transaction keeps writes atomic. The lock prevents concurrent mutations from racing. The provider and inventory lock only their own databases.
+
+The local broker has three partitions, one replica, seven-day retention and a persistent volume. This is the case-study topology, not a capacity or availability claim.
+
+## 6. Data model
+
+### Inventory database
+
+| Entity | Purpose |
+|---|---|
+| `employees` | Active employees and contact metadata |
+| `deleted_employees` | Original employee ID, email and deletion time after local deletion |
+| `device_models` | Shared manufacturer, model identifier, model, platform, processor and cores |
+| `assets` | Physical asset, employee/model references, provider identity, purchase, report/contact and site data |
+| `asset_attributes` | One row per asset for RAM, storage and battery |
+| `deleted_assets` | Provider ID, serial, device name and deletion time retained after local deletion |
+| `sync_runs` | Sync mode, status, counters, timestamps and errors |
+| `event_inboxes` | Durable event payload, processing status, attempts and errors |
+| `device_event_states` | Latest accepted state/version per provider device |
+| `shared_event_states` | Ordering checkpoints for shared employee and model data |
+| `sync_locks` | Inventory lock for sync/event/recovery transactions |
+| `jobs`, `failed_jobs` | Laravel queue storage and terminal failures |
+| `rejected_notifications` | Invalid or conflicting Kafka records |
+
+Core constraints:
+
+| Table | Main columns and rules |
+|---|---|
+| `employees` | `id` primary key; `email` unique; username, name, position, phone; timestamps |
+| `deleted_employees` | `employee_id` primary key; `email` unique; `deleted_at`; no duplicated personal metadata |
+| `device_models` | `id`; manufacturer + model identifier unique; model, platform, processor and cores; no timestamps |
+| `assets` | `id`; serial unique; employee/deleted-employee and model references; provider + provider device ID unique; name, UDID, purchase, report/contact and site fields; timestamps |
+| `asset_attributes` | One row per asset; RAM, storage and battery; timestamps |
+| `deleted_assets` | Provider, provider device ID, serial, name and deletion time; provider + serial unique |
+
+An imported asset points to either an active employee or a deleted-employee identity. Unassigned provider devices are removed rather than stored with both references empty.
+
+### Provider database
+
+| Entity | Purpose |
+|---|---|
+| `provider_devices` | Current provider state, device version, generation and removal tombstone |
+| `provider_generation` | Monotonic provider sequence and transaction lock |
+| `producer_outbox` | Event payload, status, attempts, error, retry time and publication time |
+
+The provider and inventory databases have different credentials. Provider migrations live in `backend/database/provider-migrations`; inventory migrations live in `backend/database/migrations`.
+
+Repository interfaces are the database access boundary. Eloquent implementations contain the queries. The database is not exposed as a separate network service.
+
+`provider_device_id` is the upstream record identity used for events, versions and targeted lookups. Serial code identifies the physical asset locally. Both are retained because they solve different identity problems.
+
+## 7. Deletion and reconciliation
+
+### Local asset deletion
+
+1. Save provider ID, serial, device name and deletion time in `deleted_assets`.
+2. Delete the local asset and its cascading attributes.
+3. Keep the employee and provider state unchanged.
+4. Show the retained identity under Testing.
+
+There is no restore button. Sync Now performs complete reconciliation, so an assigned asset that still exists upstream reappears. `POST /api/restorations` also provides targeted recovery by provider ID but is not exposed in the UI.
+
+### Local employee deletion
+
+The active employee row is removed. `deleted_employees` stores only the original ID, email and deletion time. Linked assets set `employee_id` to `null` and retain `deleted_employee_id`, so they display `Deleted user (email)` without keeping the employee active.
+
+An assigned-device event, complete reconciliation or targeted recovery recreates the employee with the same internal ID, relinks retained assets and removes the tombstone. Provider IDs on the assets identify the upstream devices; the deleted-employee row does not duplicate that list.
+
+### Provider removal or unassignment
+
+A provider removal or missing employee email removes the local asset because only assigned devices are imported. It does not delete the employee. Provider DELETE retains a provider tombstone and emits `device.removed`; unassignment emits `device.unassigned`.
+
+`report_date` is a freshness watermark, not an event cursor. `report_date` and `last_contact_at` do not trigger events by themselves, which prevents routine reporting timestamps from flooding Kafka.
+
+## 8. Failure handling and Activity
+
+| Failure | Implemented behavior |
+|---|---|
+| Provider change succeeds but outbox insert fails | The provider transaction rolls back both |
+| Kafka publication fails | Outbox row remains pending with retry information |
+| Publisher crashes after Kafka accepts the event | Event may be resent; the inventory inbox deduplicates it |
+| Consumer stops before offset commit | Kafka redelivers; the inbox deduplicates it |
+| Queue dispatch fails | Pending inbox row is recovered and dispatched again |
+| Invalid or conflicting Kafka record | Saved in `rejected_notifications` before acknowledgement |
+| Worker attempt fails | Inventory changes roll back and the inbox becomes `retrying` |
+| Worker exhausts three attempts | Inbox becomes `failed` and appears in Activity for manual retry |
+| Older event arrives late | Device version and provider generation prevent regression |
+| Reconciliation races with an old event | Reconciliation records the current version and the old event is ignored |
+
+Delivery is at least once. HTTP 202 from the event-ingestion endpoint means the inbox saved the event; it does not mean inventory processing finished.
+
+Activity shows two failure boundaries:
+
+1. **Provider delivery:** pending outbox rows with device name, serial, event type, provider ID, attempts, error and retry time. The UI displays at most 100 rows, identifies truncation, exports the displayed rows to CSV and can process up to ten rows immediately.
+2. **Inventory processing:** only events that exhausted all three automatic attempts. Each row identifies the affected device and employee and offers a retry. Full payloads and exceptions remain in `event_inboxes` and `failed_jobs` for debugging.
+
+The deterministic **Simulate Kafka failure** control creates the same durable pending-outbox state that a failed publication would leave; it does not stop Kafka. Automatic retries continue, and Activity can process the deferred row immediately.
+
+Demo reset/failure and Provider Lab routes are registered only for local/testing use. Provider database credentials never reach the inventory service.
+
+## 9. API endpoints
+
+### Provider API: port 8002
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/provider/snapshot` | Complete versioned state, including removal tombstones |
+| GET | `/api/provider/devices/{providerId}` | One versioned device or tombstone |
+| POST | `/api/provider/devices` | Create provider state and an outbox event |
+| PATCH | `/api/provider/devices/{providerId}` | Apply partial changes; serial cannot change |
+| DELETE | `/api/provider/devices/{providerId}` | Retain a tombstone and create a removal event |
+| POST | `/api/provider/import` | Import a complete raw Jamf-format response |
+| POST | `/api/provider/scan` | Compare the fixture with provider state and emit semantic changes |
+| POST | `/api/provider/seed` | Initialize an empty provider store once |
+| GET | `/api/provider/outbox` | Pending count and up to 100 summaries |
+| POST | `/api/provider/outbox/retry` | Immediately process up to ten pending events |
+| POST | `/api/provider/testing/reset` | Local/testing reset |
+| POST | `/api/provider/testing/kafka-failure` | Local/testing deterministic failure |
+
+### Inventory API: port 8000
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/assets`, `/api/assets/{id}` | List assets and read details |
+| GET | `/api/employees`, `/api/employees/{id}` | List employees and read complete employee details |
+| DELETE | `/api/assets/{id}` | Delete only the local asset and retain recovery identity |
+| DELETE | `/api/employees/{id}` | Delete only the active employee and retain identity |
+| POST | `/api/sync` | Direct fixture import and reconciliation |
+| POST | `/api/sync/provider` | Reconcile with provider state; used by Sync Now |
+| GET | `/api/deleted-assets` | List local asset deletions |
+| POST | `/api/restorations` | Targeted provider lookup and recovery; no UI action |
+| GET | `/api/sync-runs` | Recent sync outcomes and counters |
+| POST | `/api/events/jamf` | HTTP/test ingestion into the durable inbox |
+| GET | `/api/events` | Technical processing history |
+| GET | `/api/event-failures` | Actionable permanent inventory failures |
+| POST | `/api/events/{id}/retry` | Retry a failed inventory event |
+| GET | `/api/provider-outbox` | Proxy pending outbox summaries for Activity/CSV |
+| POST | `/api/provider-outbox/retry` | Proxy manual outbox processing |
+| POST | `/api/simulator/jamf` | Technical fixture scan; not shown in UI |
+| POST | `/api/demo/reset` | Reset provider fixture state and inventory |
+| POST | `/api/demo/kafka-failure` | Create one deterministic pending notification |
+| POST | `/api/demo/provider-devices` | Provider Lab create |
+| PATCH | `/api/demo/provider-devices/{providerId}` | Provider Lab name/RAM update |
+| DELETE | `/api/demo/provider-devices/{providerId}` | Provider Lab remove |
+
+The local operational endpoints are unauthenticated for this case study. They need restricted, company-scoped access before a multi-customer deployment.
+
+## 10. Alternatives and capacity
+
+### Solutions considered
 
 | Solution | Decision |
 |---|---|
-| Full synchronization | Keep for initial import and recovery. Re-reading every device for every change is wasteful |
-| Scheduled polling | Simple fallback, but shorter intervals repeatedly transfer unchanged data |
-| `reportDate` cursor | Do not use without a provider guarantee that every relevant change updates it and removals are represented |
-| Increasing device ID | Do not use as a cursor; it misses edits, unassignments and removals |
-| Purchase-date filter | Do not use for change detection; it does not change with later updates |
-| ID-only event followed by provider GET | Valid and smaller on Kafka, but adds a provider request and depends on provider availability |
-| Complete-state event | Chosen; the worker can process a stored event without a provider read |
-| Changed-fields-only event | Not chosen; merging partial messages makes ordering and replay harder |
-| Direct outbox-to-HTTP delivery | Simpler for one consumer and a reasonable alternative; Kafka was chosen to demonstrate burst buffering and replay |
-| Kafka | Implemented with the transactional outbox. The estimated average load alone does not require Kafka |
-| Serverless deployment | A reasonable alternative for bursty work. API Gateway, Lambda and SQS can replace always-running API/worker/Kafka containers while retaining durable delivery and reconciliation. It is described below but is not implemented |
-| gRPC | Not used. Typed calls do not solve change detection or persistence; HTTP is sufficient for query/control traffic here |
-| Version/hash list or batch API | Useful future optimization for reconciliation, but not part of the supplied provider contract |
+| Full synchronization | Keep for initial import and recovery; wasteful for every change |
+| Scheduled polling | Simple fallback, but repeatedly transfers unchanged data |
+| `reportDate` cursor | Reject without a guarantee that all changes and removals update it |
+| Increasing device ID | Reject; misses edits, unassignments and removals |
+| Purchase-date filter | Reject for change detection; later changes do not alter purchase date |
+| ID-only event plus provider GET | Valid and smaller, but adds a request and provider dependency |
+| Complete-state event | Chosen; replay works without a provider read |
+| Changed-fields-only event | Reject; partial merging makes ordering and replay harder |
+| Direct outbox-to-HTTP | Simpler for one consumer; Kafka demonstrates buffering and replay |
+| Kafka | Implemented with the transactional outbox |
+| Serverless deployment | Viable infrastructure alternative, described below |
+| gRPC | Unnecessary for query/control traffic; it does not solve persistence or detection |
+| Version/hash batch API | Useful future reconciliation optimization; absent from supplied contract |
 
-This repository modifies only the supplied mock provider. The real Jamf API's response shape, authentication, pagination, filters and rate limits must be verified before replacing the adapter.
+### Back-of-the-envelope estimate
 
-## Back-of-the-envelope capacity estimate
+Planning assumptions from the design discussion, not assignment facts or benchmarks:
 
-These are planning assumptions from the design discussion, not assignment facts or benchmark results:
-
-- 100 customers.
-- 10,000 to 1,000,000 devices per customer: 1 million to 100 million devices in total.
-- 10% annual additions/departures plus 1% replacements.
-- One event per affected device: 11% of the fleet per year. If a replacement produces both removal and addition, use 12%.
-- 2 KB for a complete device event and 250 bytes for an ID-only event.
+- 100 customers;
+- 10,000 to 1,000,000 devices per customer: 1 million to 100 million total;
+- 10% annual additions/departures plus 1% replacements;
+- one event per affected device: 11% of the fleet per year;
+- 2 KB per complete event and 250 bytes per ID-only event.
 
 | Total devices | Events/year at 11% | Average events/second | Complete-event traffic/year | ID-only traffic/year |
 |---|---:|---:|---:|---:|
 | 1 million | 110,000 | 0.0035 | 0.22 GB | 0.0275 GB |
 | 100 million | 11 million | 0.35 | 22 GB | 2.75 GB |
 
-At 2 KB per device, one full import is about 2 GB to 200 GB. A daily full import transfers about 730 GB to 73 TB per year, mostly unchanged data.
+At 2 KB per device, one complete import transfers about 2 GB to 200 GB. A daily complete import transfers about 730 GB to 73 TB per year, mostly unchanged data.
 
-Complete events add about 0.19 GB to 19.25 GB per year over ID-only events. With 30 days of retention and three stored copies, that difference is about 0.047 GB to 4.75 GB. Three copies are a planning assumption; the local Docker setup has one Kafka broker and one replica.
+Complete events add about 0.19 GB to 19.25 GB per year over ID-only events. With 30-day retention and three copies, the difference is about 0.047 GB to 4.75 GB. Three copies are a planning assumption; the local Kafka broker has one replica.
 
-If every device created one event per day, the average would rise to about 12 to 1,157 events per second. This is why routine contact timestamps are excluded from the event fingerprint. Kafka can absorb a temporary burst, but database and worker capacity still determine how fast the backlog clears.
+If every device emitted one event per day, the average becomes about 12 to 1,157 events per second. Routine report/contact timestamps are therefore excluded from the event fingerprint. Kafka can buffer a burst, while database and worker capacity determine how quickly it clears.
 
-Kafka is already designed to scale. The calculated load does not justify adding consumer partitions or database shards to this case study. If this becomes a multi-customer product, add `company_id` so the same email, serial number or provider device ID may safely exist in different companies and every query is restricted to the authenticated company. This is a data-isolation requirement before it is a scaling technique.
+Kafka already supports horizontal scaling. The expected load does not justify adding consumer partitions or database shards to this case study. Future changes should follow measurements:
 
-Future scaling should follow the measured bottleneck. If selecting pending database rows becomes slow, add a composite outbox index for the actual query, such as status, retry time and ID; include company when work is company-scoped. If consumer lag grows, add partitions and consumers. If a provider throttles one company, schedule work fairly by company. Database sharding remains a later option for measured throughput or storage limits.
+- slow pending-row selection: add a composite outbox index for the actual query, such as status, retry time and ID;
+- growing consumer lag: add partitions and consumers;
+- one provider/customer being throttled: schedule work fairly by company;
+- measured database throughput or storage limit: consider company-based sharding.
 
-## Alternative serverless deployment
+For a multi-customer product, add `company_id` to identities and queries so two companies can safely have the same email, serial or provider ID and cannot access each other's data. This is a data-isolation requirement before it is a sharding strategy.
 
-The same application boundary could be deployed with managed, usage-based services:
+## 11. Serverless alternative and cost
+
+An alternative deployment can keep the same domain and adapter boundaries while replacing always-running processes:
 
 ```text
 React on S3/CloudFront
   -> API Gateway HTTP API
   -> Lambda provider/API functions
-  -> Aurora MySQL Serverless (provider state, inventory and durable outbox/inbox)
+  -> Aurora MySQL Serverless for provider and inventory persistence
   -> scheduled Lambda outbox publisher
-  -> SQS with a dead-letter queue
+  -> SQS with dead-letter queue
   -> Lambda inventory worker
-  -> Aurora MySQL Serverless
 ```
 
-SQS is enough for the calculated traffic and is simpler to operate than a Kafka cluster. Use a FIFO message group based on company and device only if strict per-device queue ordering is required; the existing versions and idempotency rules are still required. EventBridge Scheduler can run reconciliation and the outbox relay. Cognito or an existing identity provider can authenticate users and carry their company identity. This deployment keeps the provider adapter and application services; it changes infrastructure, not the domain model.
+SQS is sufficient for the estimated traffic and simpler to operate than Kafka. Use FIFO message groups only if strict queue-level device ordering is required; versions and idempotency remain necessary. EventBridge Scheduler can run reconciliation and the outbox relay. Cognito or an existing identity provider can carry the authenticated company identity.
 
-The following monthly event-path estimate uses the README assumptions, 9,167 to 916,667 events per month, and public US pricing. It assumes one 2 KB event, a 512 MB Lambda running for 500 ms, one HTTP API request and three SQS operations per event. It excludes free tiers and rounds the result:
+This illustrative monthly event-path estimate uses 9,167 to 916,667 events, public US pricing, a 2 KB message, a 512 MB Lambda running for 500 ms, one HTTP API request and three SQS operations per event. Free tiers are excluded.
 
 | Component | Low estimate | High estimate |
 |---|---:|---:|
@@ -191,195 +571,64 @@ The following monthly event-path estimate uses the README assumptions, 9,167 to 
 | SQS requests | $0.01 | $1.10 |
 | **Event-path subtotal** | **about $0.06/month** | **about $6.02/month** |
 
-These figures show that the expected device-change events are not the main cost. Aurora capacity and storage, backups, network/NAT use, user-facing reads, full reconciliations, security services, support and observability are not included and may dominate the bill. They require a region, availability target, database size, API traffic and retention policy before they can be estimated. Current prices must be checked in the [AWS Lambda](https://aws.amazon.com/lambda/pricing/), [API Gateway](https://aws.amazon.com/api-gateway/pricing/), [SQS](https://aws.amazon.com/sqs/pricing/), [Aurora](https://aws.amazon.com/rds/aurora/pricing/) and [CloudWatch](https://aws.amazon.com/cloudwatch/pricing/) calculators before implementation.
+Database capacity/storage, backups, network/NAT use, user-facing reads, reconciliation, security, support and observability are excluded and may dominate. Current prices should be checked with the [AWS Lambda](https://aws.amazon.com/lambda/pricing/), [API Gateway](https://aws.amazon.com/api-gateway/pricing/), [SQS](https://aws.amazon.com/sqs/pricing/), [Aurora](https://aws.amazon.com/rds/aurora/pricing/) and [CloudWatch](https://aws.amazon.com/cloudwatch/pricing/) calculators.
 
-Logging cost should be controlled at the source: emit structured errors and state transitions, use metrics for counts, avoid an information log for every unchanged asset, sample high-volume diagnostics, keep short searchable retention and archive older logs to object storage. CloudWatch can deliver Lambda logs to S3 or Firehose. Grafana Cloud or Datadog can receive OpenTelemetry logs and metrics, but either may cost more depending on ingestion, indexing and retention; Datadog, for example, prices log ingestion and indexed events separately. Select a service from measured telemetry volume rather than assuming one vendor is cheaper.
+Logging cost should be controlled at the source: structured error/state-transition logs, metrics for counts, no log per unchanged asset, sampled diagnostics, short searchable retention and object-storage archival. Grafana Cloud or Datadog can receive OpenTelemetry data, but neither is automatically cheaper; ingestion, indexing and retention determine cost.
 
-The design discussion referenced a previous Prime Video subscription and buy/rent workload serving millions of customers in the North America region that cost its team about 7–8k per month. The currency, traffic profile and service breakdown were not supplied, so that figure is not used as this system's forecast. It is useful evidence that customer API traffic and observability can cost much more than the small device-event path calculated above.
+A previous Prime Video subscription and buy/rent workload serving millions of customers in North America cost the team about 7–8k per month. Its currency, traffic profile and service breakdown were not supplied, so it is context rather than this system's forecast. It shows that customer traffic and observability can cost much more than the small event path above.
 
-## Data model
+## 12. Verification
 
-### Inventory database
+The backend suite completed with **66 tests and 438 assertions**. Laravel formatting and the React production build also completed successfully.
 
-| Entity | Purpose |
-|---|---|
-| `employees` | Active employees: internal ID, unique email, username, name, position, phone and timestamps |
-| `deleted_employees` | Deleted employee identity only: original employee ID, unique email and deletion time |
-| `device_models` | Manufacturer, model identifier, model name, platform, processor and cores; unique by manufacturer + model identifier |
-| `assets` | Unique serial, active/deleted employee reference, device-model reference, provider identity, purchase data, report/contact times and site fields |
-| `asset_attributes` | One row per asset for mutable RAM, storage and battery values |
-| `deleted_assets` | Provider ID, serial, device name and deletion time retained after a local asset deletion |
-| `sync_runs` | Sync mode, status, counters, timestamps and error |
-| `event_inboxes` | Durable incoming event payload, processing status, attempts and error |
-| `device_event_states` | Last accepted version/state per provider device; retained after asset deletion |
-| `shared_event_states` | Ordering state for employee and model metadata shared by several devices |
-| `sync_locks` | Inventory transaction lock used to serialize sync/event/recovery changes |
-| `jobs`, `failed_jobs` | Laravel queue storage |
-| `rejected_notifications` | Invalid or conflicting Kafka messages retained for investigation |
+Test groups:
 
-Core schema rules:
+- `InventorySyncTest`: assignment synchronization and reconciliation edge cases;
+- `ProviderLifecycleTest`: provider lifecycle and local restoration;
+- `IndependentProviderTest`: separate provider state and outbox behavior;
+- `RemoteProviderSyncTest`: HTTP adapter, recovery fencing and Provider Lab;
+- `EventSyncTest`: event ordering, duplicates, stale events and shared metadata;
+- `KafkaNotificationReceiverTest`: durable receipt, offsets and quarantine;
+- `EmployeeTombstoneTest`: deleted identity and restoration paths;
+- `PersistenceBoundaryTest`: transaction rollback behind repositories;
+- `NumericStateTest`: numeric comparison after JSON/database round trips.
 
-| Table | Main columns and constraints |
-|---|---|
-| `employees` | `id` primary key; `email` unique; `username`, `name`, `position`, `phone`; timestamps |
-| `deleted_employees` | `employee_id` primary key and original employee ID; `email` unique; `deleted_at`; no duplicated personal metadata |
-| `device_models` | `id` primary key; `manufacturer` + `model_identifier` unique; `model_name`, `platform`, `processor_type`, `core_count`; no row timestamps |
-| `assets` | `id` primary key; `serial_code` unique; nullable `employee_id` and `deleted_employee_id`; nullable `device_model_id`; `provider` + `provider_device_id` unique; name, UDID, purchase fields, `report_date`, `last_contact_at`, `site_provider_id`, `site_name`; timestamps |
-| `asset_attributes` | One row per `asset_id`; `ram_gb`, `storage_gb`, `battery_capacity_percent`; timestamps |
-| `deleted_assets` | Provider, provider device ID, serial, device name and `deleted_at`; unique by provider + serial |
-
-An imported asset is assigned to either an active employee or a deleted-employee identity. Unassigned provider devices are removed instead of being stored with both references empty. Repository transactions maintain this rule during employee deletion and restoration.
-
-### Provider database
-
-| Entity | Purpose |
-|---|---|
-| `provider_devices` | Current provider-owned device state, version, generation and removal tombstone |
-| `provider_generation` | Monotonic provider sequence and transaction lock |
-| `producer_outbox` | Outgoing event, status, attempts, error, next retry time and publication time |
-
-The provider and inventory use separate MySQL databases and credentials. Migrations live in `backend/database/provider-migrations` and `backend/database/migrations`. The database is not a separate network service layer: repository interfaces form the database access boundary, and Eloquent implementations contain the queries. Some application types still depend on Laravel/Eloquent, so framework independence is incomplete.
-
-`provider_device_id` and serial serve different purposes. Serial is the local physical-asset identity. Provider device ID is the upstream record identity used for events, version tracking and targeted provider lookups. Both are retained because neither should silently change to represent a different device.
-
-`DeviceModel` contains the shared model and fixed configuration assumed by this case study. `AssetAttributes` contains RAM, storage and battery state that can vary per physical asset. If the real provider allows processor or core-count upgrades without changing `modelIdentifier`, those fields should move back to the asset level or a separate configuration entity.
-
-## Delete and reconciliation behavior
-
-### Local asset deletion
-
-1. Save provider ID, serial, device name and deletion time in `deleted_assets`.
-2. Delete the local asset and its cascading attributes.
-3. Keep the employee and provider record unchanged.
-4. Show the retained identity as a locally deleted device under Testing.
-
-The UI has no restore button. **Sync Now** performs complete reconciliation, so an assigned device that still exists at the provider reappears. A targeted `POST /api/restorations` recovery endpoint also exists and performs an individual provider lookup, but it is not exposed in the UI.
-
-### Local employee deletion
-
-The active row is removed from `employees`. A small row containing its original ID, email and deletion time is written to `deleted_employees`. Linked assets set `employee_id` to `null` and retain `deleted_employee_id`, so they display **Deleted user (email)** without keeping the deleted person in the active employee table.
-
-An assigned device event, a complete reconciliation, or the targeted recovery endpoint recreates the active employee with the same internal ID, relinks all retained assets and removes the `deleted_employees` row. Targeted recovery gets the relevant provider devices by the provider IDs already stored on those assets; the tombstone does not duplicate that list.
-
-### Provider removal or unassignment
-
-A provider removal or missing employee email removes the local asset because only assigned devices are imported. It does not delete the employee. Provider DELETE retains a tombstone and emits `device.removed`; unassignment emits `device.unassigned`.
-
-Absence is treated as removal only when processing a validated complete snapshot. A real paginated adapter must fetch every page before applying that rule.
-
-## Failure handling
-
-| Failure | Implemented behavior |
-|---|---|
-| Provider change succeeds but notification write fails | Same MySQL transaction rolls back both |
-| Kafka publish fails | Outbox row remains pending with retry details |
-| Publisher crashes after Kafka accepted the event | Event may be resent; inventory deduplicates it |
-| Consumer stops before offset commit | Kafka redelivers; the inbox deduplicates it |
-| Queue dispatch fails after receipt | Pending inbox row is recovered and dispatched again |
-| Invalid/conflicting Kafka payload | Record and error are saved in `rejected_notifications` before acknowledgement |
-| Worker attempt fails | Inventory writes and event completion roll back together; the inbox is marked `retrying` |
-| Worker exhausts three attempts | The inbox is marked `failed`, retained for debugging and shown in Activity with a manual retry action |
-| Older event arrives later | Device version and provider generation prevent regression |
-| Full reconciliation races with an old event | Reconciliation records the current provider version, so the old event is ignored |
-
-Delivery is at least once. HTTP 202 from the event-ingestion endpoint means the event was saved, not that inventory processing finished.
-
-The local Kafka broker has three partitions, seven-day retention, one broker and one replica. Its volume survives ordinary container restarts. A deployed system should retain Kafka and completed inbox/outbox records long enough to investigate and replay failures, then archive or delete them so storage does not grow forever.
-
-## Provider and database boundaries
-
-The adapter pattern is expressed by contracts rather than by requiring a base class:
-
-- `DeviceProvider` parses the supplied Jamf-format fixture.
-- `RemoteProviderGateway` and `TargetedDeviceProvider` define remote snapshot, lookup and control operations.
-- `HttpMockProviderAdapter` implements those operations for the separate mock provider.
-- Repository contracts isolate application services from Eloquent queries.
-- Laravel dependency injection selects the concrete implementations.
-
-Adding a second real provider still requires a provider registry/selection mechanism and tenant-scoped credentials. The current runtime binds only one provider and some services use the literal provider key `jamf`; multi-provider runtime selection is not implemented.
-
-## API endpoints
-
-Provider endpoints are on port 8002 and own simulated source state:
-
-| Method | Endpoint | Purpose |
-|---|---|---|
-| GET | `/api/provider/snapshot` | Complete versioned provider state, including removal tombstones |
-| GET | `/api/provider/devices/{providerId}` | One versioned device/tombstone; unknown ID returns 404 |
-| POST | `/api/provider/devices` | Create a provider device and outbox event |
-| PATCH | `/api/provider/devices/{providerId}` | Apply partial changes; serial cannot change |
-| DELETE | `/api/provider/devices/{providerId}` | Retain a tombstone and create a removal event |
-| POST | `/api/provider/import` | Import a complete raw Jamf-format response |
-| POST | `/api/provider/scan` | Compare the mounted fixture with provider state and emit semantic changes |
-| POST | `/api/provider/seed` | Initialize an empty provider store once |
-| GET | `/api/provider/outbox` | Pending count and up to 100 notification summaries |
-| POST | `/api/provider/outbox/retry` | Immediately try up to ten pending notifications |
-| POST | `/api/provider/testing/reset` | Local/testing demo reset |
-| POST | `/api/provider/testing/kafka-failure` | Local/testing deterministic failure state |
-
-Inventory endpoints are on port 8000:
-
-| Method | Endpoint | Purpose |
-|---|---|---|
-| GET | `/api/assets`, `/api/assets/{id}` | List assets and read details |
-| GET | `/api/employees`, `/api/employees/{id}` | List active employees and read one employee with complete assigned-device details |
-| DELETE | `/api/assets/{id}` | Delete only the local asset and retain recovery identity |
-| DELETE | `/api/employees/{id}` | Delete the active employee locally and retain the identity tombstone |
-| POST | `/api/sync` | Assignment-compatible direct fixture import and reconciliation |
-| POST | `/api/sync/provider` | Reconcile with the current provider snapshot; used by Sync Now |
-| GET | `/api/deleted-assets` | List pending local asset deletions |
-| POST | `/api/restorations` | Targeted recovery using retained provider IDs; no UI action |
-| GET | `/api/sync-runs` | Recent sync outcomes and counters |
-| POST | `/api/events/jamf` | HTTP/test ingestion into the durable inbox; Kafka runtime calls the same receiver directly |
-| GET | `/api/events` | Technical event-processing history |
-| GET | `/api/event-failures` | Actionable inventory failures summarized by affected device and employee |
-| POST | `/api/events/{id}/retry` | Retry a failed inventory event |
-| GET | `/api/provider-outbox` | Proxy pending count and notification summaries for Activity/CSV export |
-| POST | `/api/provider-outbox/retry` | Proxy manual outbox processing for Activity |
-| POST | `/api/simulator/jamf` | Technical fixture scan; not exposed in the UI |
-| POST | `/api/demo/reset` | Local/testing reset of provider fixture state and local inventory |
-| POST | `/api/demo/kafka-failure` | Local/testing deterministic pending notification |
-| POST | `/api/demo/provider-devices` | Provider Lab: create a provider device without running reconciliation |
-| PATCH | `/api/demo/provider-devices/{providerId}` | Provider Lab: update provider name/RAM without running reconciliation |
-| DELETE | `/api/demo/provider-devices/{providerId}` | Provider Lab: remove a provider device without running reconciliation |
-
-The demo reset/failure routes are registered only in local/testing environments. The outbox status/retry routes are currently available without authentication because this is a local case study; they require restricted access in production.
-
-## Verification
-
-The backend suite completed successfully: **66 tests and 429 assertions**. The React production build and Laravel formatting check completed successfully. The migration also completed against the existing MySQL Docker volume, including legacy event records created before the new nullable fields existed.
-
-Automated tests cover initial/repeated sync, RAM and assignment changes, missing/invalid data, local deletion and recreation, provider CRUD, transactional outbox behavior, retries, duplicate/stale events, Kafka receipt/quarantine rules, timestamp-only suppression, remote reconciliation and adapter boundaries.
-
-Browser checks confirmed:
-
-- reset followed by Sync Now restores the seven-device baseline;
-- asset details render under the selected row;
-- the deterministic failure remains pending across automatic publisher cycles;
-- Activity shows the pending device name, serial, change type and retry time;
-- the CSV export action completes for the displayed pending rows;
-- Activity manually publishes that one pending notification;
-- Activity then reports an empty outbox.
-- Provider Lab creates, updates and removes provider state separately; Sync Now then reconciles the visible inventory.
-
-Multi-page pagination, mobile layout and full screen-reader testing remain unchecked. The earlier navigation race is fixed: selecting device details moves to Assets before the request starts, so a late response cannot move the user away from a tab selected afterward.
-
-Backend test command:
+Backend tests:
 
 ```sh
 docker compose --profile test run --rm --build backend-tests
 ```
 
-Frontend build command:
+Laravel formatting:
+
+```sh
+docker compose --profile test run --rm backend-tests php vendor/bin/pint --test
+```
+
+Frontend build:
 
 ```sh
 docker compose run --rm --no-deps --build frontend npm run build
 ```
 
-## Production work
+Browser verification covered:
 
-Before connecting real customers, verify the real Jamf API response, authentication, pagination and rate limits; schedule reconciliation; and protect the application and operational endpoints with company-scoped authorization.
+- reset followed by Sync Now restores seven assets;
+- asset and employee details render below the selected row;
+- a late details response does not change the user's current tab;
+- deterministic Kafka failure remains pending across automatic cycles;
+- Activity displays device, serial, type and retry time;
+- pending rows export to CSV and manual processing clears the outbox;
+- Provider Lab creates, updates and removes provider state before explicit reconciliation.
 
-The current result is a local case study: one mock provider, one company scope, separate provider and inventory databases, transactional outbox, Kafka transport, durable inventory inbox, queue worker and manual recovery controls.
+## 13. Remaining scope
 
-For a concise source-code walkthrough, see [Codebase onboarding](docs/onboarding.md).
+The delivered application is a local case study with one mock Jamf provider and one company scope. Before connecting real customers:
+
+- verify the real Jamf response, authentication, pagination, filtering and rate limits;
+- add scheduled periodic reconciliation;
+- add a provider registry and tenant-specific credentials for multiple providers;
+- add `company_id` and enforce company-scoped authorization;
+- define retention and archival for Kafka, inbox, outbox and rejected records;
+- benchmark measured peak workloads before adding indexes, partitions or shards;
+- complete multi-page pagination, mobile layout and screen-reader testing.
