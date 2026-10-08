@@ -119,32 +119,38 @@ export function EmployeeList({ employees, busy, onDetails, onDelete }) {
 }
 
 export function AssetDetails({ asset, onClose }) {
-  const fields = {
-    ...asset.specifications,
-    serial_code: asset.serial_code,
-    employee: asset.employee?.deleted_at
-      ? `Deleted user (${asset.employee.email})`
-      : asset.employee?.email || "Unassigned",
-    provider: asset.provider,
-    provider_device_id: asset.provider_device_id,
-    purchase_date: asset.purchase_date,
-  };
+  const specifications = asset.specifications || {};
+  const fields = [
+    ["RAM", specifications.ram_gb, "GiB"],
+    ["Storage", specifications.storage_gb, "GiB"],
+    ["Processor type", specifications.processor_type],
+    ["Core count", specifications.core_count],
+    ["Battery capacity", specifications.battery_capacity_percent, "%"],
+    ["Serial code", asset.serial_code],
+    [
+      "Employee",
+      asset.employee?.deleted_at
+        ? `Deleted user (${asset.employee.email})`
+        : asset.employee?.email || "Unassigned",
+    ],
+    ["Provider", asset.provider],
+    ["Provider device ID", asset.provider_device_id],
+    ["Purchase date", asset.purchase_date],
+  ];
   return (
     <section>
       <button onClick={onClose}>Close details</button>
       <h3>{asset.device_name}</h3>
-      <dl>
-        {Object.entries(fields)
-          .filter(
-            ([key]) =>
-              !["id", "asset_id", "created_at", "updated_at"].includes(key),
-          )
-          .map(([key, value]) => (
-            <React.Fragment key={key}>
-              <dt>{key.replaceAll("_", " ")}</dt>
-              <dd>{value ?? "Unknown"}</dd>
-            </React.Fragment>
-          ))}
+      <dl className="asset-details-list">
+        {fields.map(([label, value, unit]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>
+              {value ?? "Unknown"}
+              {value != null && unit ? (unit === "%" ? unit : ` ${unit}`) : ""}
+            </dd>
+          </div>
+        ))}
       </dl>
     </section>
   );
