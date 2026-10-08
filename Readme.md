@@ -54,38 +54,6 @@ The supplied task asks for a Laravel, React and MySQL application that:
 
 One employee can own several assets. Each asset has at most one current employee, so `assets.employee_id` is sufficient. A join table would be needed for assignment history or simultaneous many-to-many ownership.
 
-### Back-of-the-envelope estimate
-
-Planning assumptions from the design discussion, not assignment facts or benchmarks:
-
-- 100 customers;
-- 10,000 to 1,000,000 devices per customer: 1 million to 100 million total;
-- 10% annual additions/departures plus 1% replacements;
-- one event per affected device: 11% of the fleet per year;
-- 2 KB per complete event and 250 bytes per ID-only event.
-
-| Total devices | Events/year at 11% | Average events/second | Complete-event traffic/year | ID-only traffic/year |
-|---|---:|---:|---:|---:|
-| 1 million | 110,000 | 0.0035 | 0.22 GB | 0.0275 GB |
-| 100 million | 11 million | 0.35 | 22 GB | 2.75 GB |
-
-At 2 KB per device, one complete import transfers about 2 GB to 200 GB. A daily complete import transfers about 730 GB to 73 TB per year, mostly unchanged data.
-
-Complete events add about 0.19 GB to 19.25 GB per year over ID-only events. With 30-day retention and three copies, the difference is about 0.047 GB to 4.75 GB. Three copies are a planning assumption; the local Kafka broker has one replica.
-
-If every device emitted one event per day, the average becomes about 12 to 1,157 events per second. Routine report/contact timestamps are therefore excluded from the event fingerprint. Kafka can buffer a burst, while database and worker capacity determine how quickly it clears.
-
-The estimate leads to two conclusions. Repeated complete synchronization is expensive because it reads and transfers the entire provider inventory even when most devices are unchanged. Incremental events should handle normal changes, while a complete snapshot remains necessary as a less frequent correctness check. The average event rate alone does not require Kafka; Kafka was selected for persistent retention, replay, burst buffering and separation between the provider and inventory services.
-
-Kafka already supports horizontal scaling. The expected load does not justify adding consumer partitions or database shards to this case study. Future changes should follow measurements:
-
-- slow pending-row selection: add a composite outbox index for the actual query, such as status, retry time and ID;
-- growing consumer lag: add partitions and consumers;
-- one provider/customer being throttled: schedule work fairly by company;
-- measured database throughput or storage limit: consider company-based sharding.
-
-For a multi-customer product, add `company_id` to identities and queries so two companies can safely have the same email, serial or provider ID and cannot access each other's data. This is a data-isolation requirement before it is a sharding strategy.
-
 ### Solutions considered
 
 | Solution | Decision |
@@ -99,16 +67,74 @@ For a multi-customer product, add `company_id` to identities and queries so two 
 | Complete-state event | Chosen; replay works without a provider read |
 | Changed-fields-only event | Reject; partial merging makes ordering and replay harder |
 | Direct outbox-to-HTTP | Simpler for one consumer; Kafka provides retained replay and burst buffering |
-| Kafka | Chosen with a transactional outbox; the decision is about durability and decoupling, not average throughput |
-| Serverless deployment | Viable infrastructure alternative, described below |
-| gRPC | Unnecessary for query/control traffic; it does not solve persistence or change detection |
-| Version/hash batch API | Useful future reconciliation optimization; absent from the supplied contract |
+| Kafka event-driven synchronization | Chosen with a transactional outbox for durable delivery, replay, burst buffering and separation between services |
+| Serverless alternative | Viable with a different technology stack; described at the end of this document |
+| Provider version/hash feed | Useful future option: request only device IDs and change tokens, then fetch the devices whose token changed; unavailable in the supplied contract |
 
-### Recommendation
+### Back-of-the-envelope estimate
+
+These are planning assumptions from the design discussion, not assignment facts or measured benchmarks:
+
+- 100 customers;
+- 10,000 to 1,000,000 devices per customer: 1 million to 100 million devices in total;
+- 10% annual additions/departures plus 1% replacements;
+- one event per affected device: 11% of the fleet per year;
+- 2 KB per complete-state event and 250 bytes, or 0.25 KB, per ID-only event.
+
+The expected annual change volume is:
+
+| Total devices | Calculation | Events/year | Average events/second |
+|---|---|---:|---:|
+| 1 million | `1,000,000 × 11%` | 110,000 | `110,000 ÷ 31,536,000 = 0.0035` |
+| 100 million | `100,000,000 × 11%` | 11 million | `11,000,000 ÷ 31,536,000 = 0.35` |
+
+A complete-state event is assumed to use 1.75 KB more than an ID-only event: `2 KB - 0.25 KB = 1.75 KB`.
+
+| Events/year | Additional complete-event data |
+|---:|---:|
+| 110,000 | `110,000 × 1.75 KB ≈ 0.19 GB/year` |
+| 11 million | `11,000,000 × 1.75 KB ≈ 19.25 GB/year` |
+
+Only the retained portion occupies Kafka storage at one time. With 30-day retention, one stored copy adds approximately `annual difference × 30 ÷ 365`, or 0.016 GB to 1.58 GB. Three replicated copies would use approximately 0.047 GB to 4.75 GB. Three copies are a production planning assumption; the local Docker environment runs one Kafka broker and stores one copy.
+
+The larger rate of 12 to 1,157 events per second is a separate stress scenario in which every device changes once every day:
+
+| Total devices | Calculation | Average events/second |
+|---|---|---:|
+| 1 million | `1,000,000 ÷ 86,400 seconds` | 11.6, rounded to 12 |
+| 100 million | `100,000,000 ÷ 86,400 seconds` | 1,157.4, rounded to 1,157 |
+
+This daily-change scenario is deliberately much higher than the expected 11% annual change rate. It tests burst and scale behavior; it is not the expected workload. Routine `reportDate` and contact-time changes are excluded from the event fingerprint so they do not create unnecessary events.
+
+At 2 KB per device, one complete fleet import transfers about 2 GB to 200 GB. Repeating that every day transfers about 730 GB to 73 TB per year, mostly unchanged data. Normal changes should therefore use individual events, while a complete snapshot remains useful for initial import and occasional recovery.
+
+The expected average rate alone does not require Kafka. Kafka was selected because it retains events on disk, supports replay, absorbs bursts and allows the provider and inventory services to run independently.
+
+The expected load does not justify extra consumer partitions or database shards in this case study. Future changes should follow measurements:
+
+- slow pending-row selection: add a composite outbox index for the actual query, such as status, retry time and ID;
+- growing consumer lag: add partitions and consumers;
+- one provider/customer being throttled: schedule work fairly by company;
+- measured database throughput or storage limit: consider company-based sharding.
+
+For a multi-customer product, add `company_id` to identities and queries so two companies can safely have the same email, serial or provider ID and cannot access each other's data. This is a data-isolation requirement before it is a sharding strategy.
+
+### Recommended Kafka event-driven solution
 
 Use event-driven synchronization for normal provider changes. The Kafka consumer waits continuously for small change events, so updates do not depend on a user clicking a button and the complete fleet is not transferred for each change. The consumer polls Kafka only; it does not poll Jamf.
 
-Kafka persists records on broker storage for a configured retention period; the local environment retains them for seven days on a Docker volume. That allows a consumer to resume or replay retained events. Kafka persistence does not make a provider database update and Kafka publication one atomic operation. The provider outbox makes the state change and notification atomic in MySQL, and the inventory inbox saves the received event before the Kafka offset is committed.
+The normal event path is:
+
+1. A provider device is added, changed, unassigned or removed.
+2. The provider stores the device change and an outbox row in the same MySQL transaction.
+3. The outbox publisher sends the complete-state event to Kafka. A failed publication leaves the outbox row pending for retry.
+4. Kafka retains the event on disk and makes it available to the inventory consumer.
+5. The consumer stores the event in the inventory inbox before acknowledging its Kafka offset.
+6. The inventory worker applies the event through the provider adapter and records its result.
+
+Kafka retains records for a configured period; the local environment keeps them for seven days on a Docker volume. This supports replay and lets the inventory service catch up after an outage. Kafka cannot join the provider's MySQL transaction, so the outbox closes the gap between saving a provider change and publishing its event. The inventory inbox closes the gap between receiving an event and applying it. Device versions and event IDs make retries safe and prevent an older event from overwriting newer state.
+
+The design uses Kafka for durable asynchronous communication and burst handling. The calculated average throughput could also be handled by a simpler queue or direct delivery with an outbox. Kafka is chosen here to demonstrate retained replay, independent service operation and a path to multiple consumers; the capacity estimate does not claim that Kafka is required by throughput alone.
 
 #### Required behavior and enhancement
 
