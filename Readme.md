@@ -32,6 +32,8 @@ The supplied task asks for a Laravel, React and MySQL application that:
 - reflects assignment and attribute changes, such as a RAM update;
 - runs locally with Docker Compose.
 
+The repository keeps that required JSON-import workflow and adds a mock provider service to demonstrate a production-oriented design. Normal provider changes travel as Kafka events. **Sync Now** retries pending delivery and compares inventory with a complete provider snapshot, so it can repair missed events and restore records deleted only from the local database.
+
 ### Definitions
 
 - **Asset:** a physical device assigned to an employee. Unassigned provider devices are not kept in local inventory.
@@ -46,7 +48,7 @@ The supplied task asks for a Laravel, React and MySQL application that:
 | Import assigned devices | Rows without an employee email are removed or ignored |
 | Asset identity | `serial_code` is unique locally |
 | Employee identity | Email is unique locally |
-| Reflect assignment and attribute changes | Full reconciliation and device events upsert current values |
+| Reflect assignment and attribute changes | Full reconciliation and device events create or update current values |
 | Recreate locally deleted data | Full reconciliation recreates assigned upstream devices and employees |
 | Delete only local data from the UI | UI deletion never calls the provider delete endpoint |
 | Laravel, React and MySQL | Provided through Docker Compose |
@@ -73,14 +75,14 @@ The expected annual change volume is:
 
 A complete-state event is assumed to use 1.75 KB more than an ID-only event: `2 KB - 0.25 KB = 1.75 KB`.
 
-| Events/year | Additional complete-event data |
-|---:|---:|
-| 110,000 | `110,000 × 1.75 KB ≈ 0.19 GB/year` |
-| 11 million | `11,000,000 × 1.75 KB ≈ 19.25 GB/year` |
+| Events/year | Complete events at 2 KB | ID-only events at 0.25 KB | Difference |
+|---:|---:|---:|---:|
+| 110,000 | 0.22 GB/year | 0.0275 GB/year | `110,000 × 1.75 KB ≈ 0.19 GB/year` |
+| 11 million | 22 GB/year | 2.75 GB/year | `11,000,000 × 1.75 KB ≈ 19.25 GB/year` |
 
 Only the retained portion occupies Kafka storage at one time. With 30-day retention, one stored copy adds approximately `annual difference × 30 ÷ 365`, or 0.016 GB to 1.58 GB. Three replicated copies would use approximately 0.047 GB to 4.75 GB. Three copies are a production planning assumption; the local Docker environment runs one Kafka broker and stores one copy.
 
-The estimate stays with the expected 11% annual change rate. Routine `reportDate` and contact-time changes are excluded from the event fingerprint so they do not create unnecessary events.
+Only meaningful device changes count toward the 11% estimate. Routine `reportDate` and contact-time changes do not create events.
 
 At 2 KB per device, one complete fleet import transfers about 2 GB to 200 GB. Repeating that every day transfers about 730 GB to 73 TB per year, mostly unchanged data. Normal changes should therefore use individual events, while a complete snapshot remains useful for initial import and occasional recovery.
 
@@ -97,19 +99,21 @@ For a multi-customer product, add `company_id` to identities and queries so two 
 
 ### Solutions considered
 
-| Solution | Use / drawback |
-|---|---|
-| Full synchronization | Keep for initial import and recovery; wasteful for every change |
-| Scheduled polling | Simple fallback, but repeatedly transfers unchanged data |
-| `reportDate` cursor | Reject without a guarantee that all changes and removals update it |
-| Increasing device ID | Reject; misses edits, unassignments and removals |
-| Purchase-date filter | Reject for change detection; later changes do not alter purchase date |
-| ID-only event plus provider GET | Valid and smaller, but adds a request and provider dependency |
-| Complete-state event | Supports replay without a provider read, but uses more event storage |
-| Changed-fields-only event | Smaller, but partial merging makes ordering and replay harder |
-| Direct outbox-to-HTTP | Simpler for one consumer, but lacks Kafka's retained replay and burst buffering |
-| Serverless alternative | Viable with a different technology stack; described at the end of this document |
-| Changed-device list API | Useful future option: ask the provider which device IDs changed, then fetch only those devices; unavailable in the supplied contract |
+The choices cover separate parts of the problem: detecting changes, deciding what an event contains, delivering events and deploying the system.
+
+| Area | Solution | Use / drawback |
+|---|---|---|
+| Change detection | Full synchronization | Keep for initial import and recovery; wasteful for every change |
+| Change detection | Scheduled polling | Simple fallback, but repeatedly transfers unchanged data |
+| Change detection | `reportDate` cursor | Reject without a guarantee that all changes and removals update it |
+| Change detection | Increasing device ID | Reject; misses edits, unassignments and removals |
+| Change detection | Purchase-date filter | Reject; later changes do not alter purchase date |
+| Change detection | Changed-device list API | Useful future option: ask the provider which device IDs changed, then fetch only those devices; unavailable in the supplied contract |
+| Event contents | ID-only event plus provider GET | Smaller event, but every event needs another provider request |
+| Event contents | Complete-state event | Supports replay without a provider read, but uses more event storage |
+| Event contents | Changed-fields-only event | Smaller, but partial merging makes ordering and replay harder |
+| Event delivery | Direct outbox-to-HTTP | Simpler for one consumer, but lacks retained replay and burst buffering |
+| Deployment | Serverless alternative | Viable with a different technology stack; described at the end of this document |
 
 ### Recommended Kafka event-driven solution
 
@@ -128,11 +132,15 @@ Kafka retains records for a configured period; the local environment keeps them 
 
 The design uses Kafka for durable asynchronous communication and burst handling. The calculated average throughput could also be handled by a simpler queue or direct delivery with an outbox. Kafka is chosen here to demonstrate retained replay, independent service operation and a path to multiple consumers; the capacity estimate does not claim that Kafka is required by throughput alone.
 
-#### Required behavior and enhancement
+#### Three synchronization paths
 
-The assignment's baseline behavior is user-initiated synchronization: Laravel reads the supplied Jamf-format response, imports assigned devices and updates MySQL when synchronization is requested. That path remains available through `POST /api/sync`.
+| Path | Trigger | Purpose |
+|---|---|---|
+| Fixture import | `POST /api/sync` | Meet the assignment requirement by reading the supplied Jamf-format JSON and reconciling it with MySQL |
+| Automatic event processing | Provider change | Apply one changed device through the outbox, Kafka and inbox without fetching the full inventory |
+| Sync Now | User button | Retry up to ten pending outbox messages, then make local inventory match a complete provider snapshot |
 
-The implementation adds an event-driven path. Provider changes create outbox notifications, the publisher sends them to Kafka, and a continuously running consumer applies them without waiting for Sync Now. This is an intentional enhancement beyond the baseline requirement.
+The automatic event path is the recommended normal operation. The fixture import remains available for the assignment, and Sync Now provides explicit recovery and reconciliation.
 
 Continuous Kafka polling is better than relying only on Sync Now for normal changes because it:
 
@@ -158,19 +166,13 @@ Key decisions:
 | Question | Decision | Reason |
 |---|---|---|
 | How are normal changes synchronized? | Complete-state events | Transfer only changed devices and replay without a provider lookup |
-| How is drift repaired? | Complete snapshot reconciliation | Recover missed events, local deletions and an empty inventory |
+| How are provider/local differences repaired? | Complete snapshot reconciliation | Recover missed events, local deletions and an empty inventory |
 | Why Kafka? | Persistent event transport | Retained replay, burst buffering and service independence |
 | Why a MySQL outbox when Kafka persists events? | Transactional outbox | Kafka cannot participate in the provider's MySQL transaction |
 | Why an inventory inbox? | Persist before acknowledging Kafka | Prevent an acknowledged event from being lost before inventory processing |
 | How are duplicates and late events handled? | Event ID, device version and provider generation | Make at-least-once delivery safe and prevent older state from winning |
 | How are provider differences isolated? | Adapter interfaces | Keep Jamf-specific HTTP and response mapping outside synchronization rules |
 | How is repeated model data reduced? | Device model plus per-asset attributes | Share fixed model configuration while keeping RAM, storage and battery per asset |
-
-| Operation | Trigger | Purpose |
-|---|---|---|
-| Kafka event processing | Continuous | Apply individual provider changes automatically |
-| Process pending notifications | Automatic publisher, Activity button or Sync Now | Retry up to ten saved provider outbox notifications that have not reached Kafka |
-| Sync Now | User button | Retry pending delivery, then fetch the complete Jamf snapshot and make MySQL match it |
 
 Sync Now first asks the provider to publish up to ten pending outbox notifications to Kafka. It then implements the assignment's provider-fetch workflow. It restores locally deleted assets and employees that still exist and remain assigned upstream, creates other missing assigned records, applies changed values, and removes local assets that are absent or unassigned upstream. The sync result records how many notifications were published, failed or remain pending. Outbox publication and snapshot retrieval are separate provider calls; a successful publication is not rolled back if the later snapshot fails.
 
@@ -356,14 +358,11 @@ Provider Lab writes provider state and a durable outbox notification. The normal
 
 `files/api-mock-response.json` represents one complete Jamf API response. It is not an event log and does not contain created, updated or skipped counters. The inventory service calculates those counters by comparing provider state with local state.
 
-There are two sync paths:
+`POST /api/sync` is the assignment-compatible path that reads this file, imports it into the mock provider and reconciles the resulting snapshot. **Reset demo** also reloads provider state from the fixture.
 
-1. `POST /api/sync` is assignment-compatible. Laravel reads the JSON, sends it through the provider import boundary and reconciles the returned versioned snapshot.
-2. **Sync Now** calls `POST /api/sync/provider`. It first retries pending provider outbox delivery, then reads the provider's current HTTP snapshot, not the file.
+The automatic event path does not read the fixture. **Sync Now** retries pending outbox delivery and reads the provider's current HTTP snapshot, not the file.
 
-Provider POST, PATCH and DELETE operations update the provider database and create outbox events. Event workers process saved event payloads without reading the JSON or fetching the entire provider snapshot.
-
-**Reset demo** reloads provider state from the fixture, removes the reset-generated outbox rows and clears inventory. **Sync Now** repopulates inventory from the current snapshot. An event already in Kafka can arrive between reset and Sync Now because the three systems are separate. Provider generations and device versions remain monotonic, so after reconciliation an older event cannot overwrite the current snapshot.
+Reset removes the reset-generated outbox rows and clears inventory. Sync Now then repopulates inventory from the current snapshot. An event already in Kafka can arrive between reset and Sync Now because the provider, Kafka and inventory are separate systems. Provider generations and device versions remain monotonic, so an older event cannot overwrite the reconciled snapshot.
 
 ### Source-field mapping
 
