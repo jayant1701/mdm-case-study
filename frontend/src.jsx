@@ -29,6 +29,7 @@ function App() {
   const [page, setPage] = useState(1);
   const [lastPage, setLastPage] = useState(1);
   const [detail, setDetail] = useState(null);
+  const [employeeDetail, setEmployeeDetail] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -87,6 +88,7 @@ function App() {
     await action(async () => {
       await request("/" + kind + "/" + id, { method: "DELETE" });
       setDetail(null);
+      setEmployeeDetail(null);
       setNotice("Deleted locally. The source file was not changed.");
     });
   }
@@ -94,6 +96,11 @@ function App() {
     await action(async () => {
       setDetail(await request("/assets/" + id));
       setTab("assets");
+    });
+  }
+  async function showEmployeeDetails(id) {
+    await action(async () => {
+      setEmployeeDetail(await request("/employees/" + id));
     });
   }
   async function changeProvider(method, providerId, payload) {
@@ -193,8 +200,11 @@ function App() {
       {tab === "employees" && (
         <EmployeeList
           employees={employees}
+          detail={employeeDetail}
           busy={busy}
-          onDetails={showDetails}
+          onEmployeeDetails={showEmployeeDetails}
+          onAssetDetails={showDetails}
+          onCloseDetails={() => setEmployeeDetail(null)}
           onDelete={(id) => remove("employees", id)}
         />
       )}
@@ -225,6 +235,7 @@ function App() {
             action(async () => {
               const result = await request("/demo/reset", { method: "POST" });
               setDetail(null);
+              setEmployeeDetail(null);
               setProviderResult(null);
               setPage(1);
               setNotice(

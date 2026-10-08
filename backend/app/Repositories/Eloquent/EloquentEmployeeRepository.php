@@ -28,6 +28,11 @@ final class EloquentEmployeeRepository implements EmployeeRepository
         return Employee::with('assets')->orderBy('email')->get();
     }
 
+    public function details(int $id): Employee
+    {
+        return Employee::with(['assets.deviceModel', 'assets.specifications'])->findOrFail($id);
+    }
+
     public function deleteLocal(int $id): void
     {
         // The caller holds a transaction and provider lock.

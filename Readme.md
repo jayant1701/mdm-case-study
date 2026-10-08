@@ -40,7 +40,7 @@ On fresh Docker volumes, the provider initializes its store from the supplied JS
 The UI has four areas:
 
 - **Assets** lists devices. Details open directly below the selected row.
-- **Employees** lists active employees and their assigned assets.
+- **Employees** lists active employees and their assigned assets. Selecting an employee opens their contact, status and complete assigned-device details directly below the row.
 - **Activity** shows whether provider notifications are waiting. If any are pending, it lists their device name, serial, change type and retry state, offers a manual processing action, and can export the displayed rows as CSV.
 - **Testing** can reset the demo, create one deterministic delivery-failure state, change provider devices through Provider Lab, list locally deleted devices and show technical sync/event history. Provider Lab changes the provider only; use Sync Now to fetch those changes into the visible inventory.
 
@@ -263,7 +263,7 @@ Inventory endpoints are on port 8000:
 | Method | Endpoint | Purpose |
 |---|---|---|
 | GET | `/api/assets`, `/api/assets/{id}` | List assets and read details |
-| GET | `/api/employees` | List active employees with assets |
+| GET | `/api/employees`, `/api/employees/{id}` | List active employees and read one employee with complete assigned-device details |
 | DELETE | `/api/assets/{id}` | Delete only the local asset and retain recovery identity |
 | DELETE | `/api/employees/{id}` | Soft delete only the local employee |
 | POST | `/api/sync` | Assignment-compatible direct fixture import and reconciliation |
@@ -287,7 +287,7 @@ The demo reset/failure routes are registered only in local/testing environments.
 
 ## Verification
 
-The backend suite completed successfully: **61 tests and 399 assertions**. The React production build completed successfully.
+The backend suite completed successfully: **61 tests and 404 assertions**. The React production build completed successfully.
 
 Automated tests cover initial/repeated sync, RAM and assignment changes, missing/invalid data, local deletion and recreation, provider CRUD, transactional outbox behavior, retries, duplicate/stale events, Kafka receipt/quarantine rules, timestamp-only suppression, remote reconciliation and adapter boundaries.
 

@@ -89,6 +89,20 @@ th {
   margin: 0;
   border-color: #b9c9ef;
 }
+.employee-link {
+  display: grid;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  text-align: left;
+}
+.employee-link span {
+  font-weight: 400;
+}
+.employee-assets {
+  margin-top: 12px;
+}
 code {
   font-size: 13px;
 }

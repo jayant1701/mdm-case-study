@@ -22,6 +22,13 @@ class InventorySyncTest extends InventoryTestCase
         $this->assertDatabaseCount('assets', 7);
         $this->getJson('/api/assets')->assertOk()->assertJsonCount(7, 'data')->assertJsonPath('data.0.specifications.ram_gb', 16);
         $this->getJson('/api/employees')->assertOk()->assertJsonCount(6, 'data');
+        $employee = Employee::where('email', 'alex.smith@company.test')->firstOrFail();
+        $this->getJson('/api/employees/'.$employee->id)
+            ->assertOk()
+            ->assertJsonPath('email', 'alex.smith@company.test')
+            ->assertJsonCount(2, 'assets')
+            ->assertJsonPath('assets.0.device_model.model_identifier', 'MacBookPro18,3')
+            ->assertJsonPath('assets.0.specifications.ram_gb', 16);
     }
 
     public function test_ram_reassignment_and_explicit_null(): void

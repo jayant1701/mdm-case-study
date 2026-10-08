@@ -28,6 +28,11 @@ final class InventoryController extends Controller
         return ['data' => $this->employees->listWithAssets()];
     }
 
+    public function employee(int $employee)
+    {
+        return $this->employees->details($employee);
+    }
+
     public function runs()
     {
         return ['data' => $this->runs->recent(25)];

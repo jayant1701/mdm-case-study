@@ -65,7 +65,15 @@ export function AssetList({
   );
 }
 
-export function EmployeeList({ employees, busy, onDetails, onDelete }) {
+export function EmployeeList({
+  employees,
+  detail,
+  busy,
+  onEmployeeDetails,
+  onAssetDetails,
+  onCloseDetails,
+  onDelete,
+}) {
   return (
     <>
       <h2>Employees</h2>
@@ -81,40 +89,126 @@ export function EmployeeList({ employees, busy, onDetails, onDelete }) {
           </thead>
           <tbody>
             {employees.map((e) => (
-              <tr key={e.id}>
-                <td>
-                  {e.name || "Unknown"}
-                  <br />
-                  {e.email}
-                </td>
-                <td>{e.phone || "—"}</td>
-                <td>
-                  {e.assets.length
-                    ? e.assets.map((a) => (
-                        <div key={a.id}>
-                          <button
-                            disabled={busy}
-                            onClick={() => onDetails(a.id)}
-                          >
-                            {a.device_name}
-                          </button>
-                          <code>{a.serial_code}</code>
-                        </div>
-                      ))
-                    : "No assigned assets"}
-                </td>
-                <td>
-                  <button disabled={busy} onClick={() => onDelete(e.id)}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
+              <React.Fragment key={e.id}>
+                <tr>
+                  <td>
+                    <button
+                      className="employee-link"
+                      disabled={busy}
+                      onClick={() => onEmployeeDetails(e.id)}
+                    >
+                      <strong>{e.name || "Unknown"}</strong>
+                      <span>{e.email}</span>
+                    </button>
+                  </td>
+                  <td>{e.phone || "—"}</td>
+                  <td>
+                    {e.assets.length
+                      ? e.assets.map((a) => (
+                          <div key={a.id}>
+                            <button
+                              disabled={busy}
+                              onClick={() => onAssetDetails(a.id)}
+                            >
+                              {a.device_name}
+                            </button>
+                            <code>{a.serial_code}</code>
+                          </div>
+                        ))
+                      : "No assigned assets"}
+                  </td>
+                  <td>
+                    <button
+                      disabled={busy}
+                      onClick={() => onEmployeeDetails(e.id)}
+                    >
+                      Details
+                    </button>
+                    <button disabled={busy} onClick={() => onDelete(e.id)}>
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+                {detail?.id === e.id && (
+                  <tr className="detail-row">
+                    <td colSpan="4">
+                      <EmployeeDetails
+                        employee={detail}
+                        onAssetDetails={onAssetDetails}
+                        onClose={onCloseDetails}
+                      />
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
             ))}
           </tbody>
         </table>
       </div>
       {!employees.length && <p>No employees yet.</p>}
     </>
+  );
+}
+
+function EmployeeDetails({ employee, onAssetDetails, onClose }) {
+  const assets = employee.assets || [];
+  const fields = [
+    ["Name", employee.name],
+    ["Email", employee.email],
+    ["Phone", employee.phone],
+    ["Status", employee.deleted_at ? "Deleted locally" : "Active"],
+    ["Assigned devices", assets.length],
+  ];
+
+  return (
+    <section>
+      <button onClick={onClose}>Close details</button>
+      <h3>{employee.name || employee.email}</h3>
+      <dl className="asset-details-list">
+        {fields.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value ?? "Unknown"}</dd>
+          </div>
+        ))}
+      </dl>
+      <h4>Assigned devices</h4>
+      {!assets.length && <p>No assigned devices.</p>}
+      {assets.length > 0 && (
+        <div className="table employee-assets">
+          <table>
+            <thead>
+              <tr>
+                <th>Device / serial</th>
+                <th>Model</th>
+                <th>RAM</th>
+                <th>Provider ID</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {assets.map((asset) => (
+                <tr key={asset.id}>
+                  <td>
+                    <strong>{asset.device_name}</strong>
+                    <br />
+                    <code>{asset.serial_code}</code>
+                  </td>
+                  <td>{asset.device_model?.model_name || "Unknown"}</td>
+                  <td>{asset.specifications?.ram_gb ?? "Unknown"} GiB</td>
+                  <td>{asset.provider_device_id}</td>
+                  <td>
+                    <button onClick={() => onAssetDetails(asset.id)}>
+                      Device details
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 

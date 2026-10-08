@@ -15,6 +15,7 @@ if (config('mdm.role') === 'provider') {
 Route::get('/assets', [InventoryController::class, 'assets']);
 Route::get('/assets/{asset}', [InventoryController::class, 'asset']);
 Route::get('/employees', [InventoryController::class, 'employees']);
+Route::get('/employees/{employee}', [InventoryController::class, 'employee']);
 Route::delete('/assets/{asset}', [InventoryController::class, 'deleteAsset']);
 Route::delete('/employees/{employee}', [InventoryController::class, 'deleteEmployee']);
 Route::post('/sync', [InventoryController::class, 'sync']);

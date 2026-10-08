@@ -13,5 +13,7 @@ interface EmployeeRepository
 
     public function listWithAssets(): Collection;
 
+    public function details(int $id): Employee;
+
     public function deleteLocal(int $id): void;
 }
