@@ -17,7 +17,6 @@ function App() {
   const [tab, setTab] = useState("assets");
   const [assets, setAssets] = useState([]);
   const [employees, setEmployees] = useState([]);
-  const [events, setEvents] = useState([]);
   const [runs, setRuns] = useState([]);
   const [deletedAssets, setDeletedAssets] = useState([]);
   const [providerResult, setProviderResult] = useState(null);
@@ -35,10 +34,9 @@ function App() {
   const [notice, setNotice] = useState("");
 
   async function refresh(p = page) {
-    const [a, e, v, r, d, o] = await Promise.all([
+    const [a, e, r, d, o] = await Promise.all([
       request("/assets?page=" + p),
       request("/employees"),
-      request("/events"),
       request("/sync-runs"),
       request("/deleted-assets"),
       request("/provider-outbox").catch((error) => ({
@@ -52,7 +50,6 @@ function App() {
     setAssets(a.data);
     setLastPage(a.last_page);
     setEmployees(e.data);
-    setEvents(v.data);
     setRuns(r.data);
     setDeletedAssets(d.data);
     setOutbox(o);
@@ -227,7 +224,6 @@ function App() {
       {tab === "testing" && (
         <Testing
           deletedAssets={deletedAssets}
-          events={events}
           runs={runs}
           providerResult={providerResult}
           busy={busy}
@@ -259,11 +255,6 @@ function App() {
             changeProvider("PATCH", id, payload)
           }
           onProviderRemove={(id) => changeProvider("DELETE", id)}
-          onRetry={(id) =>
-            action(() =>
-              request("/events/" + id + "/retry", { method: "POST" }),
-            )
-          }
         />
       )}
       <footer>

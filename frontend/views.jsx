@@ -339,7 +339,6 @@ export function Activity({ outbox, onRetryDelivery, busy }) {
 
 export function Testing({
   deletedAssets,
-  events,
   runs,
   providerResult,
   busy,
@@ -348,7 +347,6 @@ export function Testing({
   onProviderCreate,
   onProviderUpdate,
   onProviderRemove,
-  onRetry,
 }) {
   return (
     <>
@@ -414,26 +412,6 @@ export function Testing({
           </table>
         </div>
       )}
-      <h3>Inventory event processing</h3>
-      {!events.length && <p>No notifications yet.</p>}
-      {events.map((e) => (
-        <article key={e.id}>
-          <strong>
-            {e.payload?.device?.asset?.device_name || e.provider_device_id}:{" "}
-            {e.status}
-          </strong>
-          <p>
-            {e.type} · version {e.version} · generation {e.producer_generation}{" "}
-            · {e.outcome || e.status} · attempts {e.attempts}
-          </p>
-          {e.last_error && <p className="error">{e.last_error}</p>}
-          {e.status === "failed" && (
-            <button disabled={busy} onClick={() => onRetry(e.id)}>
-              Retry
-            </button>
-          )}
-        </article>
-      ))}
       <h3>Synchronization runs</h3>
       {runs.map((r) => (
         <article key={r.id}>
