@@ -2,7 +2,6 @@
 
 use App\Services\EventReceiver;
 use App\Services\MockProviderService;
-use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 
 if (config('mdm.role') === 'provider') {
@@ -11,10 +10,6 @@ if (config('mdm.role') === 'provider') {
     return;
 }
 require __DIR__.'/kafka.php';
-
-Artisan::command('inspire', function () {
-    $this->comment(Inspiring::quote());
-})->purpose('Display an inspiring quote');
 
 Artisan::command('events:recover', function (EventReceiver $receiver) {
     $this->info('Dispatched '.$receiver->recover().' pending inbox records.');

@@ -152,6 +152,8 @@ For event-size planning, assume 2 KB for a complete-device event and 250 bytes, 
 
 Kafka partitions allow consumers to scale across hosts, and a production broker cluster can replicate events for availability. This provides one durable event stream instead of making each provider host deliver changes directly to inventory hosts. The outbox is still required, and multiple publishers must safely claim its rows. The local case study uses one broker; add brokers, partitions or database sharding only when availability requirements or measurements justify them.
 
+This design is more complex than the minimum required for the case study. The estimated average event rate does not require Kafka on throughput alone. For a provider without event support, or a small single-host integration, scheduled polling would be simpler. Kafka is justified when durable buffering, replay and independent consumer scaling are required.
+
 #### Two runtime workflows
 
 The provider-backed application has two normal runtime workflows. `POST /api/sync` remains only as the assignment-compatible fixture-import path.
