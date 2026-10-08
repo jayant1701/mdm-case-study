@@ -59,9 +59,11 @@ function App() {
       setBusy(false);
     }
   }
-  async function sync() {
+  async function sync(mode = "provider") {
     await action(async () => {
-      const r = await request("/sync", { method: "POST" });
+      const r = await request(mode === "file" ? "/sync" : "/sync/provider", {
+        method: "POST",
+      });
       const c = r.counters;
       setNotice(
         `Sync complete: ${c.created_assets} created, ${c.updated_assets} updated, ${c.unchanged_assets} unchanged, ${c.removed_assets} removed. ${c.warnings.length} warnings.`,
@@ -100,9 +102,12 @@ function App() {
         <div>
           <small>LOCAL MDM DEMO</small>
           <h1>Device inventory</h1>
-          <p>Jamf mock provider · full sync and durable simulated events</p>
+          <p>
+            Sync Now uses current provider state. Import source JSON explicitly
+            reloads the fixture.
+          </p>
         </div>
-        <button disabled={busy} onClick={sync}>
+        <button disabled={busy} onClick={() => sync("provider")}>
           {busy ? "Working…" : "Sync Now"}
         </button>
       </header>

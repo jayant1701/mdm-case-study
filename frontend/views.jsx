@@ -25,7 +25,11 @@ export function AssetList({ assets, busy, onDetails, onDelete }) {
                 </td>
                 <td>{a.device_model?.model_name || "Unknown"}</td>
                 <td>{a.specifications?.ram_gb ?? "—"} GiB</td>
-                <td>{a.employee?.deleted_at ? `Deleted user (${a.employee.email})` : a.employee?.email || "Unassigned"}</td>
+                <td>
+                  {a.employee?.deleted_at
+                    ? `Deleted user (${a.employee.email})`
+                    : a.employee?.email || "Unassigned"}
+                </td>
                 <td>
                   <button disabled={busy} onClick={() => onDetails(a.id)}>
                     Details
@@ -101,7 +105,9 @@ export function AssetDetails({ asset, onClose }) {
   const fields = {
     ...asset.specifications,
     serial_code: asset.serial_code,
-    employee: asset.employee?.deleted_at ? `Deleted user (${asset.employee.email})` : asset.employee?.email || "Unassigned",
+    employee: asset.employee?.deleted_at
+      ? `Deleted user (${asset.employee.email})`
+      : asset.employee?.email || "Unassigned",
     provider: asset.provider,
     provider_device_id: asset.provider_device_id,
     purchase_date: asset.purchase_date,
@@ -140,14 +146,15 @@ export function Activity({
     <>
       <h2>Simulated provider notifications</h2>
       <p>
-        Edit the mounted source JSON, then scan for meaningful changes. Complete
-        device state is queued, so the worker does not fetch the source again.
-        Changes to report date or last contact alone produce no notification.
-        Full Sync Now establishes a baseline; unchanged scans emit nothing.
+        Edit the source JSON, then explicitly import its changes. Provider API
+        edits are already queued automatically. Complete device state is queued,
+        so the worker does not fetch the source again. Changes to report date or
+        last contact alone produce no notification. Full Sync Now establishes a
+        baseline; unchanged scans emit nothing.
       </p>
       <div className="controls">
         <button disabled={busy} onClick={onSend}>
-          Scan source and queue changes
+          Import JSON changes and queue events
         </button>{" "}
         <button disabled={busy} onClick={onRestore}>
           Restore locally deleted assets
