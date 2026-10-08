@@ -233,7 +233,7 @@ docker compose down -v
 - **Activity** shows provider notifications waiting for Kafka and inventory events that exhausted automatic retries. Pending delivery rows can be exported as CSV or processed manually.
 - **Testing** resets the demo, creates a deterministic Kafka-delivery failure, changes provider devices through Provider Lab, lists locally deleted assets and shows technical history.
 
-Provider Lab changes only provider state. **Sync Now** fetches the current provider snapshot and reconciles the visible inventory.
+Provider Lab writes provider state and a durable outbox notification. The normal Kafka path can update inventory asynchronously. **Sync Now** explicitly fetches the complete provider snapshot and reconciles inventory, including recovery from a missed event.
 
 ### Purpose of the JSON fixture
 
@@ -246,7 +246,7 @@ There are two sync paths:
 
 Provider POST, PATCH and DELETE operations update the provider database and create outbox events. Event workers process saved event payloads without reading the JSON or fetching the entire provider snapshot.
 
-**Reset demo** reloads provider state from the fixture and clears inventory. Inventory remains empty until **Sync Now** is selected. Provider generation and device versions stay monotonic so delayed pre-reset events cannot overwrite the new snapshot.
+**Reset demo** reloads provider state from the fixture, removes the reset-generated outbox rows and clears inventory. **Sync Now** repopulates inventory from the current snapshot. An event already in Kafka can arrive between reset and Sync Now because the three systems are separate. Provider generations and device versions remain monotonic, so after reconciliation an older event cannot overwrite the current snapshot.
 
 ### Source-field mapping
 
@@ -312,7 +312,7 @@ The UI calls only the inventory API. Sync Now and Provider Lab are proxied throu
 | Pattern | Use in this repository |
 |---|---|
 | Adapter | `DeviceProvider`, `TargetedDeviceProvider` and `RemoteProviderGateway` isolate provider-specific formats and transport |
-| Repository | Persistence contracts keep Eloquent queries out of orchestration services |
+| Repository | Most inventory persistence is behind contracts with Eloquent implementations; provider mutation and outbox publishing still use Eloquent/DB directly |
 | Dependency injection | `AppServiceProvider` selects concrete adapters and repositories |
 | Transactional outbox | Provider state and its outgoing event commit together |
 | Durable inbox and idempotent consumer | Events are stored before Kafka acknowledgement and duplicates are safe |
@@ -458,7 +458,7 @@ An imported asset points to either an active employee or a deleted-employee iden
 
 The provider and inventory databases have different credentials. Provider migrations live in `backend/database/provider-migrations`; inventory migrations live in `backend/database/migrations`.
 
-Repository interfaces are the database access boundary. Eloquent implementations contain the queries. The database is not exposed as a separate network service.
+Repository interfaces form most of the inventory database boundary, and their Eloquent implementations contain those queries. Provider-domain services and the outbox publisher still access Eloquent/DB directly. The database is not exposed as a separate network service.
 
 `provider_device_id` is the upstream record identity used for events, versions and targeted lookups. Serial code identifies the physical asset locally. Both are retained because they solve different identity problems.
 
