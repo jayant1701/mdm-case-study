@@ -1,165 +1,103 @@
-# Final event-driven solution design
+# Final state-carrying event solution
 
-## Scope
-Deliver Laravel + React + MySQL in Docker Compose. Laravel directly reads the unchanged files/api-mock-response.json; React uses HTTP APIs. Full manual Sync Now imports assigned devices, updates attributes and assignments, recreates deleted records, and yields 7 assets / 6 employees initially. JamfSyncService is our Laravel code, not external Jamf. External Jamf is not modified. Simulated events are separate messages; actual webhook payloads/coverage must be verified later.
+## Scope and architecture
 
-## Architecture and interfaces
-React -> thin Laravel controllers -> JamfSyncService -> DeviceReconciler -> persistence contracts -> Eloquent repositories -> MySQL. DeviceProvider contract exposes snapshot() and findByProviderId(id). JamfMockProvider reads/validates/maps the file to normalized records. All reconciliation uses that common format. JamfSyncService owns locking, run lifecycle and counts. AssetDeletionService owns delete/restore tracking. EventReceiver owns durable intake; queued ProcessDeviceEvent delegates execution policy to EventProcessor. Dependency injection binds the provider and persistence interfaces. Explicit repositories own asset aggregates (including attributes), employees, device models, sync runs, restore tasks, event inbox and provider locks. TransactionBoundary owns nested transaction/lock scopes. Sync decisions stay outside repositories; no generic CRUD base repository is used.
+Deliver Laravel + React + MySQL in Docker Compose. Full sync reads the original JSON directly and initially produces 7 assets / 6 employees. JamfSyncService is our Laravel class, not external Jamf. A hypothetical complete-state provider is demonstrated by a source-file simulator. No actual Jamf webhook behavior is asserted.
 
-Events flow: receiver -> durable inbox -> Laravel database queue -> worker -> adapter current-device lookup -> transaction reconciliation -> inbox completed. Kafka/gRPC are unnecessary locally. A worker container uses the same Laravel code. Full sync remains for initial import and reconciliation. Mock targeted lookup still reads the full file; it does not claim fewer external reads. Future HTTP adapter could fetch only affected IDs. reportDate is provenance, not an assumed complete checkpoint; purchase date cannot detect later changes.
-
-## Models
-Employee: internal id, unique normalized email, nullable name/phone. One employee has many assets.
-DeviceModel: id, manufacturer, model_identifier, model_name; unique manufacturer + model_identifier. Shared metadata is descriptive, not immutable. Missing identifiers allow null asset model link.
-Asset: id, unique normalized serial_code, nullable employee_id FK, nullable device_model_id FK, device_name, provider, provider_device_id, optional udid/purchased/purchase_date/report_date. Unique provider + provider_device_id when present. Serial is the upsert identity.
-AssetAttributes: unique asset_id FK cascading on deletion; nullable ram_gb/storage_gb/processor_type/core_count/battery_capacity_percent. These are per-device mutable properties. RAM conversion follows reference division by 1024, documented in UI.
-SyncRun: provider, mode full/event/restore, status in_progress/succeeded/failed, started_at/completed_at, counters JSON, error_details. Failure survives reconciliation rollback.
-EventInbox: unique event_id, provider, provider_device_id, type, payload JSON, status pending/processing/succeeded/failed, attempts, processed_at, last_error. Conflicting reuse of an ID is rejected.
-RestoreTask: provider/device identity and serial, deleted_at, status pending/restored/upstream_missing/upstream_unassigned, attempts, error. Retained independently from deleted Asset.
-Laravel jobs/failed_jobs: durable execution and retry diagnostics.
-No EmployeeAsset join entity: current employee FK fits one assignee; history is outside scope. No fake incremental checkpoint when source offers none. Production would namespace identity/state by customer.
-
-## Final assumptions awaiting company answers
-Employee deletion hard-deletes employee and sets related assets employee_id null. Full sync restores assignments. This temporary local unassigned state is explicit.
-An existing device becoming unassigned removes its local asset, but keeps employee. A device missing from a validated complete snapshot is removed. Reject malformed/truncated envelopes and totalCount mismatches before any removals. Failed snapshots do not cause deletion.
-Explicit source null clears nullable values; missing optional fields preserve existing values where practical, using field-presence information. Document snapshot-only simplifications honestly.
-Reject duplicate serials and conflicting provider identities before writes. Employee/model metadata conflicts are resolved by deterministic provider-ID order and warned, not input order.
-Local asset delete and RestoreTask creation are atomic. Full sync restores naturally; a restore endpoint targets pending identities and does not recreate upstream-missing or unassigned devices.
-Events always fetch latest state; they do not apply stale patches. Manual/worker writes share a database-backed lock. Duplicate notifications are safe. Receipt commits inbox before HTTP 202; pending inbox recovery closes queue dispatch failure gaps. Bounded retries and failed diagnostics remain visible.
-
-## API and UI
-GET /api/assets (paginated, nested employee/model/attributes), GET /api/assets/{id}, GET /api/employees (assigned asset summaries), DELETE /api/assets/{id}, DELETE /api/employees/{id}, POST /api/sync, GET /api/sync-runs, POST /api/events/jamf, GET /api/events, POST /api/restorations.
-Simulated event input: event_id, provider_device_id, type=device.changed|device.removed. This is our demo schema, not a claim about Jamf schema. Real webhook authentication is not implemented; bind the local demo to localhost.
-React Assets/Employees tabs, details, delete confirmations, loading/errors, summary and event-demo panel. No manual create/edit. Users edit mounted fixture separately to simulate source changes. Original fixture remains unchanged in Git.
-
-## Atomic implementation plan
-1. Commit design before code.
-2. Bootstrap Laravel/React and Docker startup.
-3. Add constrained schema/models.
-4. Add adapter/full reconciliation and meaningful tests.
-5. Add deletion/restoration and tests.
-6. Add durable event intake/worker/retry and tests.
-7. Add API/UI and build checks.
-8. Document startup, assumptions and measured verification limits.
-Each step is a small atomic commit. No publish/PR required. Docker became available after the user restarted it; root verification will report actual container results separately. Use available npm at C:/Program Files/nodejs/npm.cmd; no global runtime installations.
-
-## Verification
-Test initial 7/6, unchanged repeat, RAM update, reassignment, null handling, duplicate rollback, delete recreation, employee deletion, unassignment/missing policies, malformed snapshot no deletions, event idempotency/conflicting IDs, targeted current-state lookup, failed event persistence/retry and restoration. Frontend build and browser/API checks when runnable. SQLite tests do not prove MySQL locks/constraints; report real-MySQL coverage separately.
-
-## Future production extension
-Verify Jamf event support, signatures, timestamps, batch/targeted endpoints. Add authenticated webhook integration, tenant-scoped identities, provider checkpoints only when supported and scheduled authoritative reconciliation. Local CRUD does not emit upstream events; restoration remains independent. Serverless execution is a deployment option, not required for event-driven processing.
-
-## Architecture diagram
 ```mermaid
 flowchart TD
-    React[React UI] -->|HTTP JSON| API[Laravel controllers]
-    API --> Full[JamfSyncService]
-    API --> Inbox[Durable event inbox]
-    Inbox --> Queue[Database queue]
-    Queue --> Worker[Worker]
-    Worker --> Full
+    React[React UI] -->|HTTP| API[Laravel controllers]
+    API --> Full[JamfSyncService full sync]
     Full --> Adapter[DeviceProvider / Jamf mock adapter]
-    Adapter --> Mock[Unchanged inventory JSON]
-    Full --> Reconcile[Device reconciler]
+    Adapter --> File[Original JSON]
+    API --> Simulator[Semantic change simulator]
+    Simulator --> Adapter
+    Simulator --> Baseline[Durable producer baseline]
+    Simulator --> Inbox[Complete-state durable inbox / outbox]
+    Inbox --> Queue[Database queue]
+    Queue --> Worker[ProcessDeviceEvent / EventProcessor]
+    Worker --> Apply[Apply stored payload and version policy]
+    Apply --> Reconcile[DeviceReconciler]
+    Full --> Reconcile
     Reconcile --> Repositories[Persistence contracts / Eloquent repositories]
     Repositories --> DB[(MySQL)]
-    API --> Delete[Atomic local deletion and restore task]
-    Delete --> Repositories
-    DB -->|Pending restorations| Full
 ```
 
-## Entity relationships
+The worker does not connect to the provider/file. Controllers validate HTTP boundaries; services own sync policy; repositories own persistence; TransactionBoundary owns locked transactions. No generic repository base or Kafka/gRPC is required.
+
+## Models
+
+| Entity | Key fields and purpose |
+|---|---|
+| Employee | Internal ID; normalized unique email; name/phone |
+| DeviceModel | Shared manufacturer + model identifier uniqueness; model name |
+| Asset | Internal ID; unique serial; nullable employee/model FKs; device name, provider/device ID, purchase and report provenance |
+| AssetAttributes | Unique asset FK with cascade; individual RAM/storage/processor/cores/battery |
+| SyncRun | Mode/status/times/counters/error diagnostics |
+| RestoreTask | Source identity and deleted time retained independently; pending/restored/missing/unassigned outcome |
+| EventInbox | Unique event ID and provider/device/version; complete payload, content hash, generation, status/attempts/outcome |
+| SimulatedProviderDevice | Durable per-device source baseline, semantic fingerprint, version/generation, last complete state, removal tombstone |
+| DeviceEventState | Applied per-device version/generation and state; survives asset deletion |
+| SharedEventState | Employee/model identity, latest generation and metadata fingerprint |
+| SimulatorGeneration | Monotonic provider-wide producer generation |
+| SyncLock | Permanent provider row; database transaction owns lock lifetime |
+
 ```mermaid
 erDiagram
     EMPLOYEE o|--o{ ASSET : assigned
     DEVICE_MODEL o|--o{ ASSET : describes
     ASSET ||--|| ASSET_ATTRIBUTE : specifications
-    EMPLOYEE {
-        bigint id PK
-        string email UK
-        string name
-        string phone
-    }
-    DEVICE_MODEL {
-        bigint id PK
-        string manufacturer
-        string model_identifier
-        string model_name
-    }
-    ASSET {
-        bigint id PK
-        string serial_code UK
-        bigint employee_id FK
-        bigint device_model_id FK
-        string provider
-        string provider_device_id
-    }
-    ASSET_ATTRIBUTE {
-        bigint asset_id FK,UK
-        decimal ram_gb
-        decimal storage_gb
-        string processor_type
-        int core_count
-        decimal battery_capacity_percent
-    }
 ```
-The nullable relationships reflect missing model identity and the temporary state after local employee deletion. Restore tasks and event inbox rows intentionally do not cascade with assets, because they must survive asset deletion.
 
-## API examples
-Manual reconciliation:
-```http
-POST /api/sync
-Accept: application/json
-```
-Response contains the persisted SyncRun, its status and counters such as created_assets, updated_assets and unchanged_assets.
+No employee-assets join table is required for one current assignee. History and multi-tenant identities are future scope. Device-model descriptions are not assumed immutable. Individual specifications can differ/change.
 
-Simulated notification (not an actual Jamf payload):
-```http
-POST /api/events/jamf
-Content-Type: application/json
+## Provider and event contracts
 
-{"event_id":"demo-101-001","provider_device_id":"101","type":"device.changed"}
-```
-HTTP 202 means durably accepted, not processed. GET /api/events exposes completion and error status. Reusing the same event ID and payload does not apply a second independent event.
+DeviceProvider exposes complete snapshot and targeted identity lookup for future adapters. JamfMockProvider validates the envelope and maps to DeviceRecord. Full sync/restoration use it; queued payload processing does not.
 
-Restore local deletions without a full reconciliation:
-```http
-POST /api/restorations
-Accept: application/json
-```
-The mock adapter still reads the file once. Only pending restore identities are reconciled; unrelated inventory is not updated by this operation.
+DeviceEvent contains event ID, provider-device ID, positive per-device version, producer_generation, lifecycle type and complete normalized device state. Complete state includes serial, nullable email, employee metadata, nullable shared model, asset metadata and specifications. All mapped keys must be present, with explicit nulls. Report date travels as provenance when a semantic change emits.
 
-## Explicit persistence layer
+Lifecycle types: added, changed, unassigned, removed. Unassigned has null email; removed carries last-known complete state and serial. This is our simulator schema. External provider versions/authentication must be verified before a real integration.
 
-Contracts live in `backend/app/Contracts/Persistence`; Eloquent implementations live in `backend/app/Repositories/Eloquent` and are bound through AppServiceProvider.
+## Producer algorithm
 
-- AssetRepository owns asset identity queries, relation-aware listing, authoritative-snapshot removal queries and the asset/specifications write aggregate. AssetWriteResult reports persistence changes; DeviceReconciler decides how to count them and which fields to apply.
-- EmployeeRepository and DeviceModelRepository persist identity-keyed, presence-aware updates. The service chooses normalized identities and model-preservation policy.
-- RestoreTaskRepository stores durable local-deletion identities and outcomes. AssetDeletionService places task creation and deletion in one locked transaction.
-- SyncRunRepository stores run lifecycle/diagnostics. JamfSyncService controls when a run starts, succeeds or fails.
-- EventInboxRepository stores notification identity/status/attempts. EventReceiver decides duplicate/conflict/retry policy; EventProcessor decides latest-state execution and failure recovery. The queued job only delegates processing.
-- TransactionBoundary exposes transaction execution and provider-locked transaction execution. DatabaseTransactionBoundary obtains the permanent lock row through ProviderLockRepository inside the same transaction. It preserves nested rollback semantics and fails closed if the lock row is absent; no TTL can expire midway.
+POST /api/simulator/jamf reads and validates the file, then compares normalized application-relevant state with the durable baseline under a provider lock. Initial simulation emits seven additions. Unchanged scans emit zero. ReportDate and lastContactTime alone do not trigger events. A real change emits even with unchanged reportDate; a changed event carries current report date. Source identity gaps fail simulation instead of inventing removal.
 
-Controllers accept identifiers and use repositories instead of implicit route-model persistence. Application services, controllers and jobs contain no direct Eloquent queries or model save/update/delete calls. Laravel's internal queue implementation remains unchanged.
+New/changed/unassigned/removed/reappearing records receive increasing device versions. One semantic batch gets a producer-global generation. Baseline/tombstones and complete inbox/outbox records commit atomically. Dispatch happens after commit; a pending-inbox recovery sweep closes dispatch gaps. A failure writing the outbox rolls back the baseline and generation too.
 
-This is a pragmatic persistence boundary: contracts return Eloquent models and Laravel collections/paginators as data records, so they are not fully independent of Laravel. Services only read those records. A future ORM replacement would require DTO/domain-record migration as well as new repository implementations.
+## Consumer ordering and transactions
 
-The schema stays in `backend/database/migrations`. Repositories do not create tables. Existing behavior remains covered, with additional injected repository failures proving atomic local deletion and rollback when inbox acknowledgment fails after a device update.
+Receipt validates the entire message and persists before 202. Exact event replay is safe; reused event ID or device/version with different content is 409. Worker decodes only stored payload. Older versions/generations complete as ignored. Equal applied versions with conflicting state fail. Newer state is reconciled and watermark/tombstone committed atomically with inbox success.
 
-## Finalized state-carrying notification upgrade
+Removal validates serial/provider identity before deleting, preventing an ID from deleting a different asset. Removed/unassigned tombstones survive deletion, blocking stale resurrection. A newer reassignment/readdition can create the asset. Shared employee/model metadata has separate generation guards: older other-device events cannot regress it, and equal-generation conflicting metadata fails.
 
-This replaces the earlier ID-only notification demo. The simulator is our producer, not a claim about real Jamf guarantees. Required full sync and local restoration continue reading the supplied JSON directly.
+Full sync remains authoritative. It silently seeds/advances the simulator baseline and consumer watermarks in its reconciliation transaction, fencing obsolete queued messages. Thus unchanged simulation after full sync emits zero. Targeted local restoration is independent of provider changes; local deletion never advances producer state.
 
-POST `/api/simulator/jamf` compares a validated normalized snapshot against a durable producer baseline. First observation emits added (or unassigned); semantic changes emit changed/unassigned; disappearance emits removed using the previous complete device payload. Reappearance emits added. Per-device versions increase monotonically, including removals. Fingerprints ignore reportDate/report_date and lastContactTime; timestamp-only changes emit nothing, but assignment/hardware changes emit even when timestamps remain unchanged. Only application-relevant normalized fields participate.
+TransactionBoundary uses the same database connection and permanent lock row for nested receipt/full/worker/delete operations. No TTL can expire while reconciliation is active. Nested failure rolls back device/watermark/inbox changes; diagnostics persist in a separate locked transaction. Failed runs remain visible. Deadlock retries initialize counters per attempt.
 
-The producer baseline and complete pending inbox/outbox messages commit together under the provider transaction lock. Queue dispatch happens afterward; existing pending recovery closes dispatch gaps. Initial simulation emits all seven records. Source identity gaps fail the simulation rather than invent removal. Worker processing never reads the provider/file: it validates and applies stored state directly.
+## Chosen sync policies
 
-Envelope: `event_id`, `provider_device_id`, positive integer `version`, `type` (`device.added`, `device.changed`, `device.unassigned`, `device.removed`), and complete normalized `device` state. Removed messages retain last-known state but explicitly signal removal; unassigned state has null email. This is a simulator contract, not Jamf's webhook schema.
+- Only assigned source devices are imported. Existing unassigned or missing devices are removed locally after a validated complete snapshot; employees remain.
+- Employee deletion sets related assets' employee FK null. Full sync recreates the employee and assignment.
+- Local asset deletion cascades attributes and atomically stores a restore task; full sync or explicit targeted restoration recreates an assigned source device.
+- Invalid/truncated snapshots, duplicate serial/provider IDs, conflicting existing identity or invalid nonempty email fail before destructive writes. Missing serial rows during full sync preserve known provider identities.
+- Explicit null clears nullable mapped values; missing optional fields preserve during full sync where supported. Events carry complete values. Source shared metadata uses deterministic lexicographic provider-ID precedence with warnings.
+- Asset counters track asset/specification persistence changes; shared employee/model updates are separate data. RAM conversion follows MB / 1024; storage absent in the original fixture stays unknown.
 
-Consumer state survives asset deletion: provider/device key, last applied version, content fingerprint, serial and tombstone/state. Older versions succeed as ignored; equal identical versions are duplicates; equal conflicting content is rejected. Inbox receipt rejects conflicting event IDs or device/version reuse and persists before 202. A newer removal/unassignment updates its tombstone in the same transaction as asset removal; stale updates cannot recreate it. A new higher-version assignment can recreate it. Global serial/provider identity checks remain in reconciliation.
+These are documented implementation choices, not pending approval gates.
 
-Full sync is an explicit authoritative reconciliation. Before writes it atomically advances producer baseline and consumer watermarks to the current semantic snapshot, emitting durable messages as needed. That fences already queued older payloads from undoing manual full sync. No heartbeat-based cursor is claimed. Targeted local restoration remains independent; producer versions do not change because an asset was deleted locally.
+## Persistence boundary and schema
 
-Repository additions own producer baseline and consumer watermarks. Version policy, simulation diff and lifecycle decisions remain in services. MySQL schema stays in migrations. Tests must establish file/provider independence of workers, ignored timestamps, changed hardware with identical timestamps, duplicate/conflicting/stale versions, tombstones, rollback and durable producer consistency.
+Contracts live in app/Contracts/Persistence; Eloquent implementations in app/Repositories/Eloquent. AssetRepository owns the asset/specifications aggregate; separate repositories own employees, models, runs, restorations, inbox/state and locks. EventStateRepository stores baseline and watermarks but does not choose version policy. Policy stays in simulator/consumer/shared-metadata services.
 
-Ordering refinement: the envelope also includes a positive `producer_generation` shared by one simulated change batch. Employee/model metadata has independent generation guards so a late event for a different device cannot regress shared values. Equal-generation conflicting shared values fail. Full sync silently seeds/advances producer baseline and consumer watermarks (rather than emitting redundant messages); an initial simulation without full sync emits seven additions, but an unchanged simulation after full sync emits zero. A full sync advances fences when needed to defeat already queued obsolete state. These sequence numbers are simulator-generated, not inferred from reportDate or promised by Jamf.
+Services/controllers/jobs do not invoke Eloquent queries or model save/update/delete methods. Contracts pragmatically return Eloquent records and Laravel collections/paginators, so a future ORM replacement still needs DTO migration. Schema remains in database/migrations. Laravel's framework queue persistence is unchanged.
+
+## API and UI
+
+Assets list/details, employee list with asset links, local delete confirmations, full Sync Now, activity outcomes, explicit restoration and retry. Activity's Scan source and queue changes calls POST /api/simulator/jamf; it does not run full sync automatically. GET /api/events shows versions/generations/outcomes. POST /api/events/jamf accepts complete state, and POST /api/events/{id}/retry requeues failures.
+
+## Verification and boundaries
+
+Substantive tests cover required sync behavior, source-free worker/retry with broken file, ignored timestamps, same-timestamp hardware updates, duplicate/version conflicts, tombstones, shared ordering, full-sync fencing, outbox/baseline atomic rollback and acknowledgment rollback. Frontend build and Docker/MySQL runtime checks are reported with exact measured counts in README/delivery.
+
+Future work: verified Jamf complete-event semantics/authentication, tenant scope, scheduled authoritative reconciliation, retention/stale-run cleanup and operational monitoring. No real webhook integration or provider sequence guarantee is invented. Legacy ID-only pending records fail validation visibly. Kafka/serverless are deployment options beyond this local demonstration.

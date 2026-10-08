@@ -1,89 +1,90 @@
-# MDM inventory — event-driven demonstration
+# MDM inventory — state-carrying event demonstration
 
-Laravel 12 + React + MySQL, with a durable simulated-event inbox and database queue. This extends the required direct-file sync; it does not modify external Jamf or claim to implement real Jamf webhooks.
+Laravel 12, React and MySQL. Required full sync reads the supplied JSON directly. The event extension simulates a provider that emits complete relevant device state; the worker applies stored payloads without fetching Jamf or rereading the file. This contract is our simulator design, not a verified Jamf webhook schema.
 
 ## Start
 
-Install Docker Desktop with the engine running, then from this repository:
+With Docker Desktop's engine running, from this repository:
 
 ```sh
 docker compose up --build
 ```
 
-Open http://localhost:5173. Click **Sync Now** to import the supplied fixture: **7 assets and 6 employees**. Backend API: http://localhost:8000/api/assets. Compose starts frontend, backend, MySQL, and a queue worker. Backend startup runs migrations automatically; MySQL uses a persistent named volume. Ports bind to localhost. The checked-in development key and database passwords are for this local demonstration only.
+Open http://localhost:5173. **Sync Now** imports the supplied fixture: **7 assets and 6 employees**. Backend API: http://localhost:8000/api/assets. Compose starts frontend, backend, MySQL and a database queue worker, applies migrations automatically, and persists MySQL in a named volume. Ports bind to localhost. Development credentials are only for this local demo.
 
-To stop: `docker compose down`. To reset all local records: `docker compose down -v` (deletes the database volume).
+Stop with `docker compose down`. Reset with `docker compose down -v` (deletes the database volume). Original assignment: [docs/assignment.md](docs/assignment.md). Final architecture, models, assumptions and ordering contract: [docs/design.md](docs/design.md).
 
-The original assignment is preserved in [docs/assignment.md](docs/assignment.md). Design, models, decisions and future production architecture are in [docs/design.md](docs/design.md).
+## Demonstrate changes
 
-## Exercise the workflow
+1. Click **Sync Now** to establish current inventory and a durable simulator baseline.
+2. Edit `files/api-mock-response.json`, keeping `totalCount` consistent. Change RAM, assignment, model metadata, or remove a device. No rebuild is required.
+3. In **Activity**, click **Scan source and queue changes**. This calls `POST /api/simulator/jamf`, comparing the complete source with the persisted producer baseline.
+4. Refresh activity after the worker processes notifications. The worker uses the queued payload, not the source file. Editing the source after enqueue does not change an already queued message.
 
-- Edit `files/api-mock-response.json` to simulate upstream changes; Laravel reads the mounted file on each sync, without rebuilding images. Keep `totalCount` equal to the number of `results`.
-- Full sync creates missing records, updates changed attributes and assignments, and removes absent/unassigned devices according to the documented assumptions. Unchanged records do not count as updates.
-- Employee lists show assigned assets with links to details. Local asset deletion also deletes its attributes and records an independent restore task. Employee deletion leaves assets temporarily unassigned. Full sync recreates source records and assignments.
-- In **Activity**, enter a provider device ID (for example `101`) and send a simulated notification. The durable worker fetches its current source state; refresh activity to see success/failure. Both changed and removed notifications use current state, so stale notifications cannot delete a device still present.
-- **Restore locally deleted assets** processes retained identities independently of provider events. Missing/unassigned upstream records are not recreated. Full sync also restores naturally.
-- Failed events remain visible and can be retried after fixing the fixture. The worker retries exceptions up to three queue attempts; the UI exposes an explicit retry afterward.
+Unchanged scans emit zero events. Changes only to `general.lastContactTime` or `general.reportDate` emit zero events. Actual assignment/hardware changes emit even when reportDate stays unchanged. Report date is informational metadata and is carried when a real change emits; its semantics are not assumed to be a complete change cursor.
 
-The demo notification schema is separate from the unchanged inventory fixture:
+Without an initial full sync, the first simulation emits seven additions. After full sync, unchanged simulation emits zero. New/edited/unassigned/removed/reappearing devices produce the corresponding lifecycle notifications. Removal includes last-known complete device state. The simulator requires source serial and provider ID to avoid inventing removals from identity gaps.
+
+Local asset deletion records an independent restore task and removes its attributes. **Restore locally deleted assets** fetches the current file and targets those identities. Local deletion does not change the producer baseline, so unchanged scans do not restore it; full sync or targeted restoration does. Employee deletion leaves linked assets temporarily unassigned until sync.
+
+## Notification contract
+
+`POST /api/events/jamf` accepts a complete normalized message. Its shape is:
 
 ```json
-{"event_id":"unique-demo-id","provider_device_id":"101","type":"device.changed"}
+{
+  "event_id": "unique-message-id",
+  "provider_device_id": "101",
+  "version": 2,
+  "producer_generation": 2,
+  "type": "device.changed",
+  "device": {
+    "provider_device_id": "101",
+    "serial_code": "C02DL0XYZQ6N",
+    "email": "alex.smith@company.test",
+    "employee": {"name": "Alex Smith", "phone": "+491234567890"},
+    "model": {"manufacturer": "Apple", "model_identifier": "MacBookPro18,3", "model_name": "MacBook Pro (14-inch, M1 Pro, 2021)"},
+    "asset": {"device_name": "Alex’s MacBook Pro", "udid": "6E662F59-DF86-41CE-BD4C-4AD8CE32369C", "purchased": true, "purchase_date": "2022-06-15", "report_date": "2025-11-20 09:15:00"},
+    "specifications": {"ram_gb": 32, "storage_gb": null, "processor_type": "Apple M1 Pro", "core_count": 10, "battery_capacity_percent": 91}
+  }
+}
 ```
 
-POST it to `/api/events/jamf`. Supported types are `device.changed` and `device.removed`. Reusing an ID with different content returns 409. Receipt stores an inbox record before returning 202; if dispatch fails, the worker's `events:recover` sweep re-dispatches pending records. Duplicate jobs are safe. There is no webhook authentication in this localhost-only demo.
+All displayed state fields are required, nullable where shown; model may be null. Types: `device.added`, `device.changed`, `device.unassigned`, `device.removed`. Unassigned requires null email; removed carries previous state. Versions are positive, monotonic per device; generation is monotonic across a producer batch. Numbers are simulator-generated, not derived from timestamps.
 
-## Design decisions
+HTTP 202 means durably accepted. Event ID or provider/device/version reuse with different content returns 409. Identical replay is safe. The durable inbox is also the local outbox: simulator baseline and messages commit atomically; queue dispatch follows commit. `events:recover` redispatches pending rows after a dispatch gap. The worker retries exceptions up to three queue attempts; failed events can be explicitly retried.
 
-- A provider interface separates Jamf mapping from transactional reconciliation; controllers stay thin. Services depend on explicit persistence contracts; Eloquent repositories own queries and writes. The asset repository persists the asset/specifications aggregate. TransactionBoundary owns transaction scopes and obtains a permanent provider row lock through ProviderLockRepository. Sync policy stays in services.
-- Employee email and asset serial are normalized unique business keys, with internal IDs as primary keys. Device models share manufacturer/model identifier/name; each asset has separate mutable RAM/storage/processor/core/battery attributes. No assignment join table: an asset has one current employee.
-- MySQL enforces foreign keys and unique constraints. Full sync, targeted updates, events, and local deletes use the same permanent provider row with a transaction-scoped lock. It cannot expire midway like a TTL lock. SQLite tests do not establish MySQL lock behavior.
-- Snapshot envelope validation, duplicate identity checks and existing identity collision checks happen before destructive writes. Invalid nonempty email fails rather than masquerading as unassignment. Missing serial rows are skipped and known provider identities protected from absence removal.
-- The full file is treated as an authoritative snapshot only after successful validation. A device becoming unassigned or absent removes its local asset, keeping its employee. These policies await company confirmation.
-- Explicit null clears nullable mapped fields; missing optional fields preserve values. Missing both model identity fields preserves an existing model reference; explicit incomplete model identity clears it. Device display name defaults to available model or `Unknown`.
-- Shared employee/model metadata is resolved by lexicographic provider-ID order, with later present fields winning and warnings recorded. Targeted lookup uses the same canonical shared metadata.
-- Asset counters describe changes to asset/attribute rows, not changes to shared employee/model rows. Runs also count newly created employees. Report date is stored as provenance, not assumed to be a complete incremental checkpoint. RAM uses the reference MB / 1024 conversion, labeled GiB in UI. Storage is unknown when absent.
+Consumer watermarks survive asset deletion. Older versions/generations are ignored. Equal applied versions with conflicting state fail. New removal/unassignment versions store tombstones atomically with deletion, preventing stale resurrection. Shared employee/model generation guards prevent older other-device events overwriting newer metadata. Full sync atomically advances baseline/watermarks to fence old queued messages before applying its authoritative snapshot.
+
+## Persistence and policies
+
+Services depend on repository interfaces; Eloquent implementations own queries/writes. AssetRepository owns assets and specifications as one aggregate. TransactionBoundary and ProviderLockRepository retain a transaction-scoped permanent row lock across full sync, notification receipt, worker processing and local deletion. No TTL expires midway. Contracts return Eloquent/Laravel data records pragmatically; this is not a completely framework-independent domain layer. Schema remains in `backend/database/migrations`.
+
+Policy choices are documented, not waiting for approval: employee deletion retains unassigned assets; source unassignment or absence removes local assets but retains employees. Absence removals require a validated complete snapshot. Explicit null clears mapped nullable values; missing optional fields preserve during full sync where supported. Event payloads carry complete state. Identity conflicts/invalid nonempty emails fail safely. Shared metadata resolves deterministically in the snapshot adapter. Report date is provenance; purchase date cannot detect later updates. RAM uses MB / 1024, labeled GiB; missing storage is unknown.
 
 ## APIs
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| GET | `/api/assets` | Paginated assets with employee, model and specifications |
-| GET | `/api/assets/{id}` | Asset details |
-| GET | `/api/employees` | Employees and assigned asset summaries |
-| DELETE | `/api/assets/{id}` | Atomic local deletion and restore tracking |
-| DELETE | `/api/employees/{id}` | Local employee deletion; linked assets retained |
-| POST | `/api/sync` | Authoritative direct-file full sync |
-| GET | `/api/sync-runs` | Latest 25 run results |
-| POST | `/api/restorations` | Process pending local-delete identities |
-| POST | `/api/events/jamf` | Durable simulated event receipt |
-| GET | `/api/events` | Latest 50 inbox records |
-| POST | `/api/events/{id}/retry` | Re-dispatch a failed event |
+| GET | `/api/assets`, `/api/assets/{id}` | Paginated list and details |
+| GET | `/api/employees` | Employees and asset links |
+| DELETE | `/api/assets/{id}`, `/api/employees/{id}` | Local deletion |
+| POST | `/api/sync` | Complete direct-file reconciliation and event fences |
+| GET | `/api/sync-runs` | Latest runs |
+| POST | `/api/restorations` | Independent local-delete restoration |
+| POST | `/api/simulator/jamf` | Scan semantic differences and queue complete state |
+| POST | `/api/events/jamf` | Accept the versioned complete-message contract |
+| GET | `/api/events` | Inbox status/version/outcome |
+| POST | `/api/events/{id}/retry` | Requeue failure |
 
 ## Verification
 
-The portable PHP suite passes **20 tests / 103 assertions** covering first/repeated sync, reassignment and RAM, separate configuration for shared models, null/missing fields, identity conflicts, incomplete snapshot protection, local asset/employee deletion, restoration, unassignment/absence, durable receipt, duplicate/conflicting events, latest-state processing, failure/retry, pending-inbox recovery, repository substitution failures during deletion/event acknowledgment, and fail-closed handling of a missing lock row. React production build passes.
+Portable PHP suite: **25 tests / 136 assertions passed**. It covers full import/repeat/RAM/reassignment/identity/deletion rules; direct worker payload processing with a broken source file and no provider calls; ignored timestamps; same-timestamp real changes; stale/duplicate/version conflicts; removal/unassignment/readdition tombstones; shared metadata ordering; full-sync fencing; atomic producer baseline/outbox rollback; inbox acknowledgment rollback and source-free retry; restoration and missing lock protection. React production build passes.
 
-Docker images and Compose startup were verified with real MySQL: migrations, full 7/6 import, unchanged repeat, asset delete/targeted restore, employee delete/recreation, and a real database-queue worker processing a duplicate notification only once. Browser validation and further integration results are recorded in the handoff report.
+Earlier Docker/MySQL verification established startup, migrations, required inventory flows, and real queue processing. The final payload upgrade's integration results are recorded separately in the delivery report. SQLite tests alone do not establish MySQL locking behavior.
 
-For local tests, install PHP 8.3+ with the required extensions and Composer, then:
+Local tests: `cd backend`, `composer install`, `php vendor/phpunit/phpunit/phpunit` with PHP 8.3+ and required extensions. Tests use SQLite and isolated temporary fixture copies. Frontend: `cd frontend && npm ci && npm run build`. Formatting: Pint and Prettier.
 
-```sh
-cd backend
-composer install
-php vendor/phpunit/phpunit/phpunit
-```
+## Boundaries
 
-The default tests use SQLite in memory and an isolated temporary copy of the fixture. They never edit the supplied JSON. Frontend verification: `cd frontend && npm ci && npm run build`. Code formatting: Laravel Pint and Prettier.
-
-## Boundaries and next steps
-
-The mock's targeted lookup still reads the complete local file. It reduces writes, not external API reads. A future real adapter could use individual/batch lookups, verified provider events, incremental cursors and periodic reconciliation. Purchase date cannot detect later updates. Kafka, gRPC, serverless deployment, tenant scoping, real credentials/webhook signatures, scheduled reconciliation and assignment history are outside this local implementation.
-
-Repository contracts intentionally return Eloquent models and Laravel collections/paginators as data records. Services do not query or mutate their persistence state, but this remains framework coupling rather than a completely ORM-independent domain model. Database schema remains in `backend/database/migrations`; no schema moves into repositories. Laravel manages its own queue persistence internally.
-
-The queue is at-least-once, not exactly-once transport: transactions and idempotent processing make duplicate delivery safe. Pending inbox recovery covers dispatch gaps. A hard process termination may leave a historical run `in_progress`; production would add stale-run cleanup and monitoring. Restore task outcomes are terminal until another local deletion/full source reconciliation; no scheduled restore loop is claimed.
-
-No GitHub repository was published and no reviewer permissions were changed.
-
-
+No real Jamf connectivity, webhook authentication, Kafka, serverless deployment, tenant scoping, automatic periodic reconciliation or GitHub publishing is claimed. The simulator reads the full local file; its worker does not. A real provider would need verified complete-payload semantics and reliable sequence numbers, or a different adapter/fallback strategy. Legacy ID-only notifications are no longer accepted; old pending legacy rows fail visibly rather than fetching implicitly. Hard process termination may leave historical sync runs in progress; production cleanup/monitoring remains future work.
