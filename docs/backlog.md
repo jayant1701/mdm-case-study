@@ -8,4 +8,4 @@ Deferred at the user's request. No navigation changes were made with the outbox 
 
 ## Activity and accessibility
 
-Replace raw sync counters in Testing with readable summaries, add device-specific action labels, and improve detail units. The navigation exposes its selected page through `aria-current`, asset details render directly below the selected row, and Activity is limited to outbox state with pending-device summaries and CSV export. Other review items remain open.
+Activity now separates provider delivery failures from permanently failed inventory processing. It names affected devices and employees, keeps temporary automatic retries out of the manual-action list, and exposes retry actions only after the queue exhausts its attempts. Full mobile and screen-reader testing remains future work.

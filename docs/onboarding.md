@@ -120,6 +120,31 @@ Provider mutation
 
 The worker processes the stored complete event payload. It does not read the JSON fixture or call the provider.
 
+### Ordering checkpoints
+
+`device_event_states` stores the newest applied version for each provider device. If device `101` has reached version 6, a delayed version 5 event is marked stale and cannot overwrite or recreate that device.
+
+`shared_event_states` handles data that can arrive through several device events. Suppose Alex owns device `101` and device `103`:
+
+```text
+Device 101 event, generation 20: Alex is a Senior Engineer
+Device 103 event, generation 15: Alex is a Backend Engineer
+```
+
+The generation-15 event may contain a valid change for device `103`, so processing continues for that device. Before writing the employee, `SharedMetadataPolicy` reads the employee checkpoint. Because generation 20 is already stored for `alex.smith@company.test`, the older employee fields are ignored and Alex remains a Senior Engineer. Device models use the same policy because many assets may refer to one model.
+
+The checkpoint schema is:
+
+| Column | Meaning |
+|---|---|
+| `provider` | Provider namespace, currently `jamf` |
+| `kind` | `employee` or `model` |
+| `identity` | Employee email or `manufacturer|model_identifier` |
+| `generation` | Newest provider generation accepted for this shared identity |
+| `fingerprint` | Hash of the shared fields at that generation |
+
+`provider + kind + identity` is unique. An older generation contributes no shared fields. The same generation with a different fingerprint is rejected as a conflict. The table stores only the latest ordering checkpoint; the real data remains in `employees` and `device_models`.
+
 ### Full reconciliation path
 
 ```text

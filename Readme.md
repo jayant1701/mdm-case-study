@@ -96,6 +96,14 @@ Provider POST / PATCH / DELETE
 
 Each event contains an event ID, provider device ID, per-device version, provider generation, lifecycle type and the complete relevant device state. Complete state avoids an extra provider GET for every event. The trade-off is a larger message.
 
+### Why shared event state exists
+
+One employee or device model can appear in events for several devices. Kafka preserves order for one device key, but it does not guarantee that events for two different devices arrive in their original order.
+
+For example, Alex owns a MacBook and an iPhone. A MacBook event at provider generation 20 says Alex is a Senior Engineer. A delayed iPhone event from generation 15 still contains Alex's older title, Backend Engineer. The iPhone data may be valid for that device, so the whole event cannot be discarded. `shared_event_states` records that employee `alex.smith@company.test` was already updated at generation 20. The worker applies the iPhone fields but ignores its older employee fields.
+
+The same rule protects device-model data shared by several assets. Each checkpoint is unique by `provider + kind + identity`: `kind` is `employee` or `model`, `identity` is an employee email or manufacturer/model identifier, `generation` is the newest accepted provider generation, and `fingerprint` is a hash of the shared fields. An older generation is ignored. The same generation with a different fingerprint is rejected as conflicting data. The actual records remain in `employees` and `device_models`; `shared_event_states` stores only ordering checkpoints, not another copy or a change history.
+
 Full reconciliation remains necessary for initial import and recovery. It is manual in this case study; no reconciliation scheduler is implemented.
 
 ### Why the outbox and Kafka are both used
@@ -325,17 +333,13 @@ Multi-page pagination, mobile layout and full screen-reader testing remain unche
 Backend test command:
 
 ```sh
-cd backend
-composer install
-php vendor/bin/phpunit
+docker compose --profile test run --rm --build backend-tests
 ```
 
 Frontend build command:
 
 ```sh
-cd frontend
-npm ci
-npm run build
+docker compose run --rm --no-deps --build frontend npm run build
 ```
 
 ## Production work
